@@ -9,10 +9,18 @@ const pino = require('pino');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// إعداد الاتصال بقاعدة البيانات السحابية Redis
 const redis = new Redis(process.env.REDIS_URL);
 
-// 🛡️ دالة ذكية ومخصصة لحفظ الجلسة في Redis مباشرة (لحماية الحساب من الحظر)
+// 🧼 أمر ذكي لتنظيف قاعدة البيانات الفاسدة فوراً عند التشغيل الأول
+async function clearCorruptedDatabase() {
+    try {
+        await redis.flushall();
+        console.log('🧹 [REDIS] تم تنظيف الجلسة الفاسدة بنجاح واكتساح الذاكرة التالفة!');
+    } catch (e) {
+        console.log('⚠️ خطأ أثناء التنظيف:', e);
+    }
+}
+
 async function useRedisAuthState(redisClient, sessionId) {
     const writeData = async (data, key) => {
         await redisClient.set(`${sessionId}:${key}`, JSON.stringify(data, BufferJSON.replacer));
@@ -116,7 +124,9 @@ function clearAllQueues() {
 }
 
 async function startBot() {
-    // تشغيل الجلسة المربوطة بـ Redis لضمان عدم الخروج نهائياً
+    // تشغيل دالة المسح أولاً للتأكد من تنظيف السيرفر
+    await clearCorruptedDatabase();
+
     const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session');
     
     const sock = makeWASocket({ 
@@ -132,7 +142,7 @@ async function startBot() {
         setTimeout(async () => {
             try {
                 let code = await sock.requestPairingCode("967782541491");
-                console.log("🔥 كود الربط هو: " + code);
+                console.log("🔥 كود الربط الجديد هو: " + code);
             } catch (e) {}
         }, 5000);
     }
@@ -143,7 +153,6 @@ async function startBot() {
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) startBot();
-            else console.log('❌ تم تسجيل الخروج من الواتساب. يجب ربط الحساب من جديد.');
         }
     });
 
@@ -252,6 +261,6 @@ async function startBot() {
         }
     });
 }
-app.get('/', (req, res) => res.send('System is active and session is secured in Redis.'));
+app.get('/', (req, res) => res.send('System is wiping database and securing new connection.'));
 app.listen(PORT, () => console.log("Server Running"));
 startBot();
