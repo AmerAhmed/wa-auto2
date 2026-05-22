@@ -135,11 +135,12 @@ async function startBot() {
     
     sock.ev.on('creds.update', saveCreds);
 
-    if (!sock.authState.creds.registered) {
+    if (!sock.authState.creds.registered if (!sock.authState.creds.registered) {if (!sock.authState.creds.registered) { !process.env.IS_PAIRING) {
         setTimeout(async () => {
             try {
                 let code = await sock.requestPairingCode("967782541491");
                 console.log("🔥 كود الربط الجديد هو: " + code);
+                process.env.IS_PAIRING = "true";
             } catch (e) {}
         }, 5000);
     }
