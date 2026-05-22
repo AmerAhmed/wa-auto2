@@ -126,7 +126,7 @@ function clearAllQueues() {
 async function startBot() {
     // تشغيل دالة المسح أولاً للتأكد من تنظيف السيرفر
 
-    const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session');
+    const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session_2');
     
     const sock = makeWASocket({ 
         auth: state, 
