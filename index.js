@@ -124,7 +124,7 @@ function clearAllQueues() {
 
 async function startBot() {
     await redis.flushall();
-    const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session_5');
+    const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session_6');
     
     const sock = makeWASocket({ 
         auth: state, 
