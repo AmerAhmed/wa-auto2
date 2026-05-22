@@ -125,7 +125,6 @@ function clearAllQueues() {
 
 async function startBot() {
     // تشغيل دالة المسح أولاً للتأكد من تنظيف السيرفر
-    await clearCorruptedDatabase();
 
     const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session');
     
