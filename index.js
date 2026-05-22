@@ -1,5 +1,4 @@
-const { default: makeWASocket, DisconnectReason } = require('@whiskeysockets/baileys');
-const { BaileysRedis } = require('@whiskeysockets/baileys-redis');
+const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const Redis = require('ioredis');
 const express = require('express');
 const path = require('path');
@@ -10,9 +9,8 @@ const pino = require('pino');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// إعداد قاعدة البيانات السحابية
+// إعداد الاتصال بـ Redis مباشرة لقراءة وحفظ الجلسة يدويًا عند الحاجة
 const redis = new Redis(process.env.REDIS_URL);
-const store = new BaileysRedis(redis);
 
 const aiKey = process.env.GEMINI_API_KEY;
 let model = null;
@@ -69,8 +67,8 @@ function clearAllQueues() {
 }
 
 async function startBot() {
-    // الاعتماد على Redis السحابي بدلاً من الملفات المحلية
-    const { state, saveCreds } = await store.useMultiFileAuthState('session');
+    // استخدام نظام الملفات الافتراضي الموثوق لـ Baileys
+    const { state, saveCreds } = await useMultiFileAuthState('session_auth');
     
     const sock = makeWASocket({ 
         auth: state, 
