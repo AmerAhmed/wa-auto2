@@ -231,7 +231,7 @@ async function startBot() {
                     } catch(e) {}
                 } else {
                     if (!model) await sock.sendMessage(remoteJid, { text: '⚠️ الذكاء الاصطناعي غير مفعل.' });
-                    else try { const aiResponse = await model.generateContent(rawCmd); await sock.sendMessage(remoteJid, { text: aiResponse.response.text() }, { quoted: msg }); } catch (e) { await sock.sendMessage(remoteJid, { text: '⚠️ حدث خطأ في AI' }); }
+                    else try { const aiResponse = await model.generateContent(rawCmd); await sock.sendMessage(remoteJid, { text: aiResponse.response.text() }, { quoted: msg }); } catch (e) { await sock.sendMessage(remoteJid, { text: '⚠️ تفاصيل الخطأ: ' + e.message }); }
                 }
                 continue;
             }
