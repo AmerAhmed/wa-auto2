@@ -3,23 +3,13 @@ const Redis = require('ioredis');
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const axios = require('axios'); // استخدمنا axios للاتصال المباشر
 const pino = require('pino');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
 const redis = new Redis(process.env.REDIS_URL);
-
-// 🧼 أمر ذكي لتنظيف قاعدة البيانات الفاسدة فوراً عند التشغيل الأول
-async function clearCorruptedDatabase() {
-    try {
-        await redis.flushall();
-        console.log('🧹 [REDIS] تم تنظيف الجلسة الفاسدة بنجاح واكتساح الذاكرة التالفة!');
-    } catch (e) {
-        console.log('⚠️ خطأ أثناء التنظيف:', e);
-    }
-}
 
 async function useRedisAuthState(redisClient, sessionId) {
     const writeData = async (data, key) => {
@@ -70,10 +60,20 @@ async function useRedisAuthState(redisClient, sessionId) {
 }
 
 const aiKey = process.env.GEMINI_API_KEY;
-let model = null;
-if (aiKey) {
-    const genAI = new GoogleGenerativeAI(aiKey);
-    model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+// دالة الاتصال المباشر بـ Gemini
+async function askGemini(prompt) {
+    if (!aiKey) return '⚠️ الذكاء الاصطناعي غير مفعل.';
+    try {
+        const response = await axios.post(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${aiKey}`,
+            { contents: [{ parts: [{ text: prompt }] }] },
+            { headers: { 'Content-Type': 'application/json' } }
+        );
+        return response.data.candidates[0].content.parts[0].text;
+    } catch (error) {
+        throw new Error(error.response?.data?.error?.message || error.message);
+    }
 }
 
 const emojis = ['💚', '💙', '💜', '💛', '🧡', '🖤', '❤️‍🔥', '🔥', '✨', '⭐', '🌟', '💫', '⚡', '💥', '💯', '🚀', '👍', '🙌', '👏', '👌', '💪', '👑', '🥳', '🤩', '😎', '🧠', '🦁', '🦅', '🎯', '💎', '🎨', '🎬', '😇', '🙂', '😌', '😉'];
@@ -124,8 +124,6 @@ function clearAllQueues() {
 }
 
 async function startBot() {
-    // تشغيل دالة المسح أولاً للتأكد من تنظيف السيرفر
-
     const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session_2');
     
     const sock = makeWASocket({ 
@@ -238,8 +236,8 @@ async function startBot() {
                         }
                     } catch(e) {}
                 } else {
-                    if (!model) await sock.sendMessage(remoteJid, { text: '⚠️ الذكاء الاصطناعي غير مفعل.' });
-                    else try { const aiResponse = await model.generateContent(rawCmd); await sock.sendMessage(remoteJid, { text: aiResponse.response.text() }, { quoted: msg }); } catch (e) { await sock.sendMessage(remoteJid, { text: '⚠️ تفاصيل الخطأ: ' + e.message }); }
+                    if (!aiKey) await sock.sendMessage(remoteJid, { text: '⚠️ الذكاء الاصطناعي غير مفعل.' });
+                    else try { const responseText = await askGemini(rawCmd); await sock.sendMessage(remoteJid, { text: responseText }, { quoted: msg }); } catch (e) { await sock.sendMessage(remoteJid, { text: '⚠️ تفاصيل الخطأ: ' + e.message }); }
                 }
                 continue;
             }
@@ -254,12 +252,12 @@ async function startBot() {
                 if (!isBotActive) return messageQueue.delete(remoteJid);
                 const fullContext = queueData.texts.join('\n'); messageQueue.delete(remoteJid);
                 let usageCount = aiUsage.get(remoteJid) || 0;
-                if (usageCount >= 20 || aiBlacklist.has(remoteJid) || !model) await sock.sendMessage(remoteJid, { text: backupReplyText });
-                else try { const aiResponse = await model.generateContent(fullContext); await sock.sendMessage(remoteJid, { text: aiResponse.response.text() }); aiUsage.set(remoteJid, usageCount + 1); saveMap('ai_usage.json', aiUsage); } catch (e) { await sock.sendMessage(remoteJid, { text: backupReplyText }); }
+                if (usageCount >= 20 || aiBlacklist.has(remoteJid) || !aiKey) await sock.sendMessage(remoteJid, { text: backupReplyText });
+                else try { const responseText = await askGemini(fullContext); await sock.sendMessage(remoteJid, { text: responseText }); aiUsage.set(remoteJid, usageCount + 1); saveMap('ai_usage.json', aiUsage); } catch (e) { await sock.sendMessage(remoteJid, { text: backupReplyText }); }
             }, 2000);
         }
     });
 }
-app.get('/', (req, res) => res.send('System is wiping database and securing new connection.'));
+app.get('/', (req, res) => res.send('System is running with direct Gemini API connection.'));
 app.listen(PORT, () => console.log("Server Running"));
 startBot();
