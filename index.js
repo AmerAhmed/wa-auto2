@@ -1,4 +1,4 @@
-const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
 const Redis = require('ioredis');
 const express = require('express');
 const path = require('path');
@@ -9,8 +9,57 @@ const pino = require('pino');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// إعداد الاتصال بـ Redis مباشرة لقراءة وحفظ الجلسة يدويًا عند الحاجة
+// إعداد الاتصال بقاعدة البيانات السحابية Redis
 const redis = new Redis(process.env.REDIS_URL);
+
+// 🛡️ دالة ذكية ومخصصة لحفظ الجلسة في Redis مباشرة (لحماية الحساب من الحظر)
+async function useRedisAuthState(redisClient, sessionId) {
+    const writeData = async (data, key) => {
+        await redisClient.set(`${sessionId}:${key}`, JSON.stringify(data, BufferJSON.replacer));
+    };
+    const readData = async (key) => {
+        const data = await redisClient.get(`${sessionId}:${key}`);
+        return data ? JSON.parse(data, BufferJSON.reviver) : null;
+    };
+    const removeData = async (key) => {
+        await redisClient.del(`${sessionId}:${key}`);
+    };
+
+    const creds = await readData('creds') || initAuthCreds();
+
+    return {
+        state: {
+            creds,
+            keys: {
+                get: async (type, ids) => {
+                    const data = {};
+                    await Promise.all(
+                        ids.map(async id => {
+                            let value = await readData(`${type}-${id}`);
+                            if (type === 'app-state-sync-key' && value) {
+                                value = require('@whiskeysockets/baileys').proto.Message.AppStateSyncKeyData.fromObject(value);
+                            }
+                            data[id] = value;
+                        })
+                    );
+                    return data;
+                },
+                set: async (data) => {
+                    const tasks = [];
+                    for (const category in data) {
+                        for (const id in data[category]) {
+                            const value = data[category][id];
+                            const key = `${category}-${id}`;
+                            tasks.push(value ? writeData(value, key) : removeData(key));
+                        }
+                    }
+                    await Promise.all(tasks);
+                }
+            }
+        },
+        saveCreds: () => writeData(creds, 'creds')
+    };
+}
 
 const aiKey = process.env.GEMINI_API_KEY;
 let model = null;
@@ -67,8 +116,8 @@ function clearAllQueues() {
 }
 
 async function startBot() {
-    // استخدام نظام الملفات الافتراضي الموثوق لـ Baileys
-    const { state, saveCreds } = await useMultiFileAuthState('session_auth');
+    // تشغيل الجلسة المربوطة بـ Redis لضمان عدم الخروج نهائياً
+    const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session');
     
     const sock = makeWASocket({ 
         auth: state, 
@@ -90,10 +139,11 @@ async function startBot() {
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
-        if (connection === 'open') console.log('✅ البوت متصل ومستعد للعمل!');
+        if (connection === 'open') console.log('✅ البوت متصل ومستعد للعمل، الجلسة محفوظة بأمان في السحابة!');
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) startBot();
+            else console.log('❌ تم تسجيل الخروج من الواتساب. يجب ربط الحساب من جديد.');
         }
     });
 
@@ -202,6 +252,6 @@ async function startBot() {
         }
     });
 }
-app.get('/', (req, res) => res.send('System is active'));
+app.get('/', (req, res) => res.send('System is active and session is secured in Redis.'));
 app.listen(PORT, () => console.log("Server Running"));
 startBot();
