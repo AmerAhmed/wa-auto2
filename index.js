@@ -3,7 +3,7 @@ const Redis = require('ioredis');
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const axios = require('axios'); // استخدمنا axios للاتصال المباشر
+const axios = require('axios');
 const pino = require('pino');
 
 const app = express();
@@ -61,7 +61,6 @@ async function useRedisAuthState(redisClient, sessionId) {
 
 const aiKey = process.env.GEMINI_API_KEY;
 
-// دالة الاتصال المباشر بـ Gemini
 async function askGemini(prompt) {
     if (!aiKey) return '⚠️ الذكاء الاصطناعي غير مفعل.';
     try {
@@ -124,7 +123,7 @@ function clearAllQueues() {
 }
 
 async function startBot() {
-    const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session_3');
+    const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session_5');
     
     const sock = makeWASocket({ 
         auth: state, 
