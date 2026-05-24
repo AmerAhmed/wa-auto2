@@ -92,6 +92,7 @@ async function askGemini(jid, prompt) {
         
         let fullPrompt = historyArray.join('\n') + '\nالمستخدم: ' + prompt;
 
+        // الموديل المجاني والموثوق
         const response = await axios.post(
             `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${aiKey}`,
             { contents: [{ parts: [{ text: fullPrompt }] }] },
