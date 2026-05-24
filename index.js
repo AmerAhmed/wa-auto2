@@ -144,7 +144,7 @@ function cancelAllPendingQueues() {
 }
 
 async function startBot() {
-    const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session_v4');
+    const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session_v5');
     
     const storedState = await redis.get('bot_active_state');
     isBotActive = storedState !== 'false';
