@@ -133,7 +133,6 @@ const messageQueue = new Map();
 const processingUsers = new Set();
 let isBotActive = true; 
 
-// دالة تفريغ طوابير الانتظار عند نشاط المالك
 function cancelAllPendingQueues() {
     for (const [qKey, qData] of messageQueue.entries()) {
         if (!qData.isOwner) {
@@ -154,9 +153,23 @@ async function startBot() {
         auth: state, 
         printQRInTerminal: false, 
         logger: pino({ level: 'silent' }),
+        browser: ["Amer_Bot", "Chrome", "1.0.0"],
         connectTimeoutMs: 60000
     });
     
+    // تم إصلاح موقع توليد الكود هنا
+    if (!sock.authState.creds.registered) {
+        console.log("⏳ جارِ طلب كود الربط لرقم المالك...");
+        setTimeout(async () => {
+            try {
+                let code = await sock.requestPairingCode(OWNER_NUMBER);
+                console.log("🔥 كود الربط الجديد هو: " + code);
+            } catch (e) {
+                console.error("⚠️ خطأ في توليد كود الربط:", e);
+            }
+        }, 3000); 
+    }
+
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
@@ -173,7 +186,6 @@ async function startBot() {
         }
     });
 
-    // مراقبة الخطين الأزرق (إذا قرأ عامر الرسالة، يتم إلغاء رد البوت لتلك المحادثة)
     sock.ev.on('messages.update', (updates) => {
         for (const { key, update } of updates) {
             if (update.status === 4 || update.status === 'READ') {
@@ -214,13 +226,11 @@ async function startBot() {
             const senderKey = participantJid.split('@')[0];
             const isOwner = msg.key.fromMe;
 
-            // إذا أرسل عامر أي رسالة في أي مكان، يتم إلغاء جميع ردود البوت المعلقة للناس
             if (isOwner) {
                 cancelAllPendingQueues();
             }
 
             if (remoteJid === 'status@broadcast') {
-                // إذا رفع عامر حالة، يتم إلغاء الردود المعلقة للناس
                 if (isOwner) {
                     cancelAllPendingQueues();
                     continue;
@@ -385,7 +395,6 @@ async function startBot() {
                 }
             };
 
-            // تعديل وقت الانتظار: 7 ثواني للناس (لتجميع الرسائل ولإعطائك فرصة للمقاطعة)، وثانيتين لأوامرك
             let delayTime = queueData.isOwner ? 2000 : 7000;
             if (queueData.timeout) clearTimeout(queueData.timeout);
             queueData.timeout = setTimeout(processQueue, delayTime);
