@@ -93,7 +93,7 @@ async function askGemini(jid, prompt) {
         let fullPrompt = historyArray.join('\n') + '\nالمستخدم: ' + prompt;
 
         const response = await axios.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${aiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${aiKey}`,
             { contents: [{ parts: [{ text: fullPrompt }] }] },
             { headers: { 'Content-Type': 'application/json' }, timeout: 15000 }
         );
@@ -243,7 +243,6 @@ async function startBot() {
                 clearTimeout(messageQueue.get(queueKey).timeout);
             }
 
-            // قسم الحالات: يتم فحصه بصرف النظر عن حالة AI
             if (remoteJid === 'status@broadcast') {
                 if (isOwner || !isBotActive) continue;
                 const [isInBlacklist, isInSilence] = await Promise.all([
@@ -253,7 +252,6 @@ async function startBot() {
                 
                 try { 
                     await sock.readMessages([msg.key]);
-                    // إذا لم يكن في قائمة "الحظر" (حظر التفاعل)، ضع إيموجي
                     if (!isInBlacklist) {
                         let reactEmoji = isInSilence ? heartEmojis[Math.floor(Math.random() * heartEmojis.length)] : emojis[Math.floor(Math.random() * emojis.length)];
                         await sock.sendMessage(participantJid, { react: { text: reactEmoji, key: msg.key } });
@@ -276,8 +274,6 @@ async function startBot() {
             if (isNormalUser && !textMessage.trim()) continue;
 
             const isAiBlacklisted = await redis.sismember('aiBlacklist', senderKey);
-
-            // تم إزالة شروط المنع هنا. الذكاء الاصطناعي يعمل للجميع ما لم يكونوا في aiBlacklist.
 
             let quotedMsg = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             let quotedText = quotedMsg?.conversation || 
@@ -308,7 +304,6 @@ async function startBot() {
                     
                     messageQueue.delete(queueKey);
                     
-                    // منع المحظورين من الذكاء الاصطناعي فقط
                     if (!queueData.isOwner && (isAiBlacklisted || !aiKey)) {
                         await sock.sendMessage(remoteJid, { text: backupReplyText });
                         return;
