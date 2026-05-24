@@ -90,9 +90,9 @@ async function askGemini(jid, prompt) {
             if (historyArray.length > 0) await redis.rpush(`context:${jid}`, ...historyArray);
         }
         
-        let fullPrompt = historyArray.join('\n') + '\nالمستخدم: ' + prompt;
+        let systemInstruction = "تعليمات النظام الصارمة: أنت لست مجرد ذكاء اصطناعي عام، بل أنت المساعد الذكي والشخصي للمبرمج عامر أحمد يحيى أحمد قاسم الخضمي. مهمتك هي الرد على رسائل أصدقائه وجهات اتصاله نيابة عنه. يجب أن تتحدث بأسلوب ودي ولبق. إذا سألك أي شخص من أنت، أخبره أنك المساعد الشخصي لعامر وأنك هنا لخدمته حتى يتفرغ عامر للرد. دافع عن عامر وتحدث عنه دائماً بكل احترام.\n\n";
+        let fullPrompt = systemInstruction + historyArray.join('\n') + '\nالمستخدم: ' + prompt;
 
-        // تم تعيين الموديل الأحدث والمتوافق مع المفتاح الأمريكي
         const response = await axios.post(
             `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${aiKey}`,
             { contents: [{ parts: [{ text: fullPrompt }] }] },
@@ -133,8 +133,19 @@ const messageQueue = new Map();
 const processingUsers = new Set();
 let isBotActive = true; 
 
+// دالة تفريغ طوابير الانتظار عند نشاط المالك
+function cancelAllPendingQueues() {
+    for (const [qKey, qData] of messageQueue.entries()) {
+        if (!qData.isOwner) {
+            clearTimeout(qData.timeout);
+            messageQueue.delete(qKey);
+            processingUsers.delete(qKey);
+        }
+    }
+}
+
 async function startBot() {
-    const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session_v3');
+    const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session_v4');
     
     const storedState = await redis.get('bot_active_state');
     isBotActive = storedState !== 'false';
@@ -152,23 +163,39 @@ async function startBot() {
         const { connection, lastDisconnect } = update;
         if (connection === 'open') {
             console.log('✅ البوت متصل ومستعد للعمل، الجلسة محفوظة بأمان في السحابة!');
-            if (!sock.authState.creds.registered && !process.env.IS_PAIRING) {
-                process.env.IS_PAIRING = "true";
-                setTimeout(async () => {
-                    try {
-                        let code = await sock.requestPairingCode(OWNER_NUMBER);
-                        console.log("🔥 كود الربط الجديد هو: " + code);
-                    } catch (e) {
-                        console.error("Pairing Error:", e);
-                    }
-                }, 3000); 
-            }
         }
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) {
                 console.log('جارِ إعادة الاتصال بعد 5 ثوانٍ...');
                 setTimeout(startBot, 5000);
+            }
+        }
+    });
+
+    // مراقبة الخطين الأزرق (إذا قرأ عامر الرسالة، يتم إلغاء رد البوت لتلك المحادثة)
+    sock.ev.on('messages.update', (updates) => {
+        for (const { key, update } of updates) {
+            if (update.status === 4 || update.status === 'READ') {
+                const qKey = `user_${key.remoteJid}`;
+                if (messageQueue.has(qKey)) {
+                    clearTimeout(messageQueue.get(qKey).timeout);
+                    messageQueue.delete(qKey);
+                    processingUsers.delete(qKey);
+                }
+            }
+        }
+    });
+
+    sock.ev.on('message-receipt.update', (updates) => {
+        for (const receipt of updates) {
+            if (receipt.receipt?.receiptTimestamp || receipt.receipt?.type === 3 || receipt.receipt?.type === 'read') {
+                const qKey = `user_${receipt.key.remoteJid}`;
+                if (messageQueue.has(qKey)) {
+                    clearTimeout(messageQueue.get(qKey).timeout);
+                    messageQueue.delete(qKey);
+                    processingUsers.delete(qKey);
+                }
             }
         }
     });
@@ -186,7 +213,42 @@ async function startBot() {
             const textMessage = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
             const senderKey = participantJid.split('@')[0];
             const isOwner = msg.key.fromMe;
-            
+
+            // إذا أرسل عامر أي رسالة في أي مكان، يتم إلغاء جميع ردود البوت المعلقة للناس
+            if (isOwner) {
+                cancelAllPendingQueues();
+            }
+
+            if (remoteJid === 'status@broadcast') {
+                // إذا رفع عامر حالة، يتم إلغاء الردود المعلقة للناس
+                if (isOwner) {
+                    cancelAllPendingQueues();
+                    continue;
+                }
+                
+                if (!isBotActive) continue;
+                const [isInBlacklist, isInSilence] = await Promise.all([
+                    redis.sismember('blacklist', senderKey),
+                    redis.sismember('silenceList', senderKey)
+                ]);
+                
+                try { 
+                    await sock.readMessages([msg.key]);
+                    if (!isInBlacklist) {
+                        let reactEmoji = isInSilence ? heartEmojis[Math.floor(Math.random() * heartEmojis.length)] : emojis[Math.floor(Math.random() * emojis.length)];
+                        await sock.sendMessage(participantJid, { react: { text: reactEmoji, key: msg.key } });
+                        
+                        const ownerJid = sock.user?.id?.split(':')[0] + '@s.whatsapp.net';
+                        if (ownerJid) {
+                            let senderName = msg.pushName || 'غير معروف';
+                            let statusNote = isInSilence ? "(مكتوم)" : "";
+                            await sock.sendMessage(ownerJid, { text: `👁️‍🗨️ *تفاعل مع حالة ${statusNote}*\n👤 الاسم: ${senderName}\n📱 الرقم: +${senderKey}\n✨ التفاعل: ${reactEmoji}` });
+                        }
+                    }
+                } catch (e) {}
+                continue;
+            }
+
             if (isOwner && textMessage.startsWith('.')) {
                 let rawCmd = textMessage.substring(1).trim();
                 let cmdMatched = allCommands.find(cmd => rawCmd === cmd || rawCmd.startsWith(cmd + ' '));
@@ -242,30 +304,6 @@ async function startBot() {
 
             if (isOwner && messageQueue.has(queueKey)) {
                 clearTimeout(messageQueue.get(queueKey).timeout);
-            }
-
-            if (remoteJid === 'status@broadcast') {
-                if (isOwner || !isBotActive) continue;
-                const [isInBlacklist, isInSilence] = await Promise.all([
-                    redis.sismember('blacklist', senderKey),
-                    redis.sismember('silenceList', senderKey)
-                ]);
-                
-                try { 
-                    await sock.readMessages([msg.key]);
-                    if (!isInBlacklist) {
-                        let reactEmoji = isInSilence ? heartEmojis[Math.floor(Math.random() * heartEmojis.length)] : emojis[Math.floor(Math.random() * emojis.length)];
-                        await sock.sendMessage(participantJid, { react: { text: reactEmoji, key: msg.key } });
-                        
-                        const ownerJid = sock.user?.id?.split(':')[0] + '@s.whatsapp.net';
-                        if (ownerJid) {
-                            let senderName = msg.pushName || 'غير معروف';
-                            let statusNote = isInSilence ? "(مكتوم)" : "";
-                            await sock.sendMessage(ownerJid, { text: `👁️‍🗨️ *تفاعل مع حالة ${statusNote}*\n👤 الاسم: ${senderName}\n📱 الرقم: +${senderKey}\n✨ التفاعل: ${reactEmoji}` });
-                        }
-                    }
-                } catch (e) {}
-                continue;
             }
 
             let isOwnerAiPrompt = isOwner && textMessage.startsWith('.');
@@ -347,8 +385,10 @@ async function startBot() {
                 }
             };
 
+            // تعديل وقت الانتظار: 7 ثواني للناس (لتجميع الرسائل ولإعطائك فرصة للمقاطعة)، وثانيتين لأوامرك
+            let delayTime = queueData.isOwner ? 2000 : 7000;
             if (queueData.timeout) clearTimeout(queueData.timeout);
-            queueData.timeout = setTimeout(processQueue, 2000);
+            queueData.timeout = setTimeout(processQueue, delayTime);
         }
     });
 }
