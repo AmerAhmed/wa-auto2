@@ -123,7 +123,6 @@ const limitReachedText = `⚠️ نعتذر، لقد استنفذ البوت ا�
 const emojis = ['💚', '💙', '💜', '💛', '🧡', '🖤', '❤️‍🔥', '🔥', '✨', '⭐', '🌟', '💫', '⚡', '💥', '💯', '🚀', '👍', '🙌', '👏', '👌', '💪', '👑', '🥳', '🤩', '😎', '🧠', '🦁', '🦅', '🎯', '💎', '🎨', '🎬', '😇', '🙂', '😌', '😉'];
 const heartEmojis = ['❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '🩷', '🩶', '🩵'];
 
-// فصل الأوامر لمنع شلل الأوامر العامة في المجموعات
 const globalCommands = ['ايقاف', 'تشغيل', 'مسح كل المحظورين', 'مسح كل المكتومين', 'مسح كل ai'];
 const targetedCommands = ['كتم', 'فك الكتم', 'حظر', 'فك الحظر', 'حظر ai', 'فك حظر ai'];
 const allCommands = [...globalCommands, ...targetedCommands].sort((a, b) => b.length - a.length);
@@ -134,7 +133,8 @@ const processingUsers = new Set();
 let isBotActive = true; 
 
 async function startBot() {
-    const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session_final');
+    // تغيير اسم الجلسة لضمان بداية نظيفة وتخطي خطأ 428
+    const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session_v2');
     
     const storedState = await redis.get('bot_active_state');
     isBotActive = storedState !== 'false';
@@ -157,7 +157,7 @@ async function startBot() {
             } catch (e) {
                 console.error("Pairing Error:", e);
             }
-        }, 5000);
+        }, 6000); // زيادة وقت الانتظار قليلاً لضمان فتح الاتصال
     }
 
     sock.ev.on('connection.update', (update) => {
@@ -188,8 +188,6 @@ async function startBot() {
             
             if (isOwner && textMessage.startsWith('.')) {
                 let rawCmd = textMessage.substring(1).trim();
-                
-                // المطابقة الدقيقة لمنع التداخل اللفظي
                 let cmdMatched = allCommands.find(cmd => rawCmd === cmd || rawCmd.startsWith(cmd + ' '));
                 
                 if (cmdMatched) {
@@ -256,7 +254,6 @@ async function startBot() {
                     await sock.readMessages([msg.key]);
                     if (!isInBlacklist) {
                         let reactEmoji = isInSilence ? heartEmojis[Math.floor(Math.random() * heartEmojis.length)] : emojis[Math.floor(Math.random() * emojis.length)];
-                        // إرسال التفاعل مباشرة إلى مشارك الحالة
                         await sock.sendMessage(participantJid, { react: { text: reactEmoji, key: msg.key } });
                     }
                 } catch (e) {}
@@ -328,7 +325,6 @@ async function startBot() {
                         await sock.sendMessage(remoteJid, { text: responseText }, queueData.isOwner ? { quoted: msg } : undefined); 
                         
                     } catch (e) { 
-                        // استرداد الحصة الموثوق عند فشل الطلب
                         if (!queueData.isOwner) {
                             await redis.decrby('globalAiUsage', 1);
                         }
@@ -358,4 +354,3 @@ async function startBot() {
 app.get('/', (req, res) => res.send('System is running securely with robust Redis architecture.'));
 app.listen(PORT, () => console.log("Server Running"));
 startBot();
-
