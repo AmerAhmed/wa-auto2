@@ -134,7 +134,7 @@ let isBotActive = true;
 
 async function startBot() {
     // تغيير اسم الجلسة لضمان بداية نظيفة وتخطي خطأ 428
-    const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session_v2');
+    const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session_v3');
     
     const storedState = await redis.get('bot_active_state');
     isBotActive = storedState !== 'false';
