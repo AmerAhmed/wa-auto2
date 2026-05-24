@@ -133,7 +133,6 @@ const processingUsers = new Set();
 let isBotActive = true; 
 
 async function startBot() {
-    // تغيير اسم الجلسة لضمان بداية نظيفة وتخطي خطأ 428
     const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session_v3');
     
     const storedState = await redis.get('bot_active_state');
@@ -148,21 +147,22 @@ async function startBot() {
     
     sock.ev.on('creds.update', saveCreds);
 
-    if (!sock.authState.creds.registered && !process.env.IS_PAIRING) {
-        process.env.IS_PAIRING = "true";
-        setTimeout(async () => {
-            try {
-                let code = await sock.requestPairingCode(OWNER_NUMBER);
-                console.log("🔥 كود الربط الجديد هو: " + code);
-            } catch (e) {
-                console.error("Pairing Error:", e);
-            }
-        }, 6000); // زيادة وقت الانتظار قليلاً لضمان فتح الاتصال
-    }
-
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
-        if (connection === 'open') console.log('✅ البوت متصل ومستعد للعمل، الجلسة محفوظة بأمان في السحابة!');
+        if (connection === 'open') {
+            console.log('✅ البوت متصل ومستعد للعمل، الجلسة محفوظة بأمان في السحابة!');
+            if (!sock.authState.creds.registered && !process.env.IS_PAIRING) {
+                process.env.IS_PAIRING = "true";
+                setTimeout(async () => {
+                    try {
+                        let code = await sock.requestPairingCode(OWNER_NUMBER);
+                        console.log("🔥 كود الربط الجديد هو: " + code);
+                    } catch (e) {
+                        console.error("Pairing Error:", e);
+                    }
+                }, 3000); 
+            }
+        }
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) {
@@ -243,6 +243,7 @@ async function startBot() {
                 clearTimeout(messageQueue.get(queueKey).timeout);
             }
 
+            // قسم الحالات: يتم فحصه بصرف النظر عن حالة AI
             if (remoteJid === 'status@broadcast') {
                 if (isOwner || !isBotActive) continue;
                 const [isInBlacklist, isInSilence] = await Promise.all([
@@ -252,9 +253,17 @@ async function startBot() {
                 
                 try { 
                     await sock.readMessages([msg.key]);
+                    // إذا لم يكن في قائمة "الحظر" (حظر التفاعل)، ضع إيموجي
                     if (!isInBlacklist) {
                         let reactEmoji = isInSilence ? heartEmojis[Math.floor(Math.random() * heartEmojis.length)] : emojis[Math.floor(Math.random() * emojis.length)];
                         await sock.sendMessage(participantJid, { react: { text: reactEmoji, key: msg.key } });
+                        
+                        const ownerJid = sock.user?.id?.split(':')[0] + '@s.whatsapp.net';
+                        if (ownerJid) {
+                            let senderName = msg.pushName || 'غير معروف';
+                            let statusNote = isInSilence ? "(مكتوم)" : "";
+                            await sock.sendMessage(ownerJid, { text: `👁️‍🗨️ *تفاعل مع حالة ${statusNote}*\n👤 الاسم: ${senderName}\n📱 الرقم: +${senderKey}\n✨ التفاعل: ${reactEmoji}` });
+                        }
                     }
                 } catch (e) {}
                 continue;
@@ -266,13 +275,9 @@ async function startBot() {
             if (!isOwnerAiPrompt && !isNormalUser) continue;
             if (isNormalUser && !textMessage.trim()) continue;
 
-            const [isInBlacklist, isInSilence, isAiBlacklisted] = await Promise.all([
-                redis.sismember('blacklist', senderKey),
-                redis.sismember('silenceList', senderKey),
-                redis.sismember('aiBlacklist', senderKey)
-            ]);
+            const isAiBlacklisted = await redis.sismember('aiBlacklist', senderKey);
 
-            if (isNormalUser && (isInSilence || isInBlacklist)) continue;
+            // تم إزالة شروط المنع هنا. الذكاء الاصطناعي يعمل للجميع ما لم يكونوا في aiBlacklist.
 
             let quotedMsg = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             let quotedText = quotedMsg?.conversation || 
@@ -303,6 +308,7 @@ async function startBot() {
                     
                     messageQueue.delete(queueKey);
                     
+                    // منع المحظورين من الذكاء الاصطناعي فقط
                     if (!queueData.isOwner && (isAiBlacklisted || !aiKey)) {
                         await sock.sendMessage(remoteJid, { text: backupReplyText });
                         return;
