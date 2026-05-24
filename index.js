@@ -94,7 +94,7 @@ async function askGemini(jid, prompt) {
 
         // الموديل المجاني والموثوق
         const response = await axios.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${aiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${aiKey}`,
             { contents: [{ parts: [{ text: fullPrompt }] }] },
             { headers: { 'Content-Type': 'application/json' }, timeout: 15000 }
         );
