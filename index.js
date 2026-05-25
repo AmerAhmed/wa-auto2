@@ -68,7 +68,8 @@ async function reserveAiQuota() {
     return true;
 }
 
-async function askGemini(jid, prompt) {
+// أضفنا متغير isOwnerMessage ليعرف البوت مع من يتحدث
+async function askGemini(jid, prompt, isOwnerMessage = false) {
     if (!aiKey) return '⚠️ الذكاء الاصطناعي غير مفعل.';
     
     if (prompt.length > 3000) {
@@ -90,7 +91,14 @@ async function askGemini(jid, prompt) {
             if (historyArray.length > 0) await redis.rpush(`context:${jid}`, ...historyArray);
         }
         
-        let systemInstruction = "تعليمات النظام الصارمة: أنت لست مجرد ذكاء اصطناعي عام، بل أنت المساعد الذكي والشخصي للمبرمج عامر أحمد يحيى أحمد قاسم الخضمي. مهمتك هي الرد على رسائل أصدقائه وجهات اتصاله نيابة عنه. يجب أن تتحدث بأسلوب ودي ولبق. إذا سألك أي شخص من أنت، أخبره أنك المساعد الشخصي لعامر وأنك هنا لخدمته حتى يتفرغ عامر للرد. دافع عن عامر وتحدث عنه دائماً بكل احترام.\n\n";
+        let systemInstruction = "";
+        
+        if (isOwnerMessage) {
+            systemInstruction = "أنت الذكاء الاصطناعي الخاص والمساعد المباشر للمبرمج عامر الخضمي. أنت الآن تتحدث مع عامر نفسه (المالك). أجب عليه مباشرة، نفذ أوامره بدقة، كن عملياً ومختصراً، ولا ترحب به بصيغة الغائب أو كأنه شخص غريب.\n\n";
+        } else {
+            systemInstruction = "تعليمات صارمة جداً لك كمساعد شخصي لعامر الخضمي:\n1. (السرية): لا تخبر أحداً أنك مساعد أو ذكاء اصطناعي إلا إذا سألك الشخص مباشرة 'من أنت؟' أو 'هل أنت عامر؟'. حينها فقط أخبره أنك مساعد عامر.\n2. (انعكاس الأسلوب - Mirroring): يجب أن تقلد نفس أسلوب المتحدث. إذا أرسل لك رسالة قصيرة وباردة، رد عليه برد قصير وبارد وبدون إيموجي. إذا كان مرحاً ومتحمساً، كن مرحاً. لا تبالغ أبداً في الترحيب والكلام الإنشائي.\n3. أجب على رسالته مباشرة وبشكل طبيعي جداً كأنك تدردش عبر الواتساب.\n4. لا تذكر اسم عامر الكامل مطلقاً، اكتفِ بـ 'عامر' فقط عند الحاجة.\n\n";
+        }
+        
         let fullPrompt = systemInstruction + historyArray.join('\n') + '\nالمستخدم: ' + prompt;
 
         const response = await axios.post(
@@ -369,7 +377,8 @@ async function startBot() {
 
                     try {
                         const targetContext = queueData.isOwner ? `owner_context_${remoteJid}` : remoteJid;
-                        const responseText = await askGemini(targetContext, fullContext); 
+                        // تم تمرير queueData.isOwner كمعامل ثالث ليعرف البوت أنك المالك
+                        const responseText = await askGemini(targetContext, fullContext, queueData.isOwner); 
                         
                         await sock.sendMessage(remoteJid, { text: responseText }, queueData.isOwner ? { quoted: msg } : undefined); 
                         
