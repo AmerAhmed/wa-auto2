@@ -144,7 +144,7 @@ function cancelAllPendingQueues() {
 }
 
 async function startBot() {
-    const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session_v6');
+    const { state, saveCreds } = await useRedisAuthState(redis, 'wa_session_v7');
     
     const storedState = await redis.get('bot_active_state');
     isBotActive = storedState !== 'false';
@@ -153,23 +153,10 @@ async function startBot() {
         auth: state, 
         printQRInTerminal: false, 
         logger: pino({ level: 'silent' }),
-        browser: ["Amer_Bot", "Chrome", "1.0.0"],
+        browser: ['Ubuntu', 'Chrome', '20.0.04'],
         connectTimeoutMs: 60000
     });
     
-    // تم إصلاح موقع توليد الكود هنا
-    if (!sock.authState.creds.registered) {
-        console.log("⏳ جارِ طلب كود الربط لرقم المالك...");
-        setTimeout(async () => {
-            try {
-                let code = await sock.requestPairingCode(OWNER_NUMBER);
-                console.log("🔥 كود الربط الجديد هو: " + code);
-            } catch (e) {
-                console.error("⚠️ خطأ في توليد كود الربط:", e);
-            }
-        }, 3000); 
-    }
-
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
@@ -185,6 +172,18 @@ async function startBot() {
             }
         }
     });
+
+    setTimeout(async () => {
+        if (!sock.authState.creds.registered) {
+            console.log("⏳ جارِ طلب كود الربط...");
+            try {
+                let code = await sock.requestPairingCode(OWNER_NUMBER);
+                console.log("🔥 الكود الحقيقي والمطابق هو: " + code);
+            } catch (e) {
+                console.error("⚠️ خطأ في توليد كود الربط:", e.message);
+            }
+        }
+    }, 6000);
 
     sock.ev.on('messages.update', (updates) => {
         for (const { key, update } of updates) {
