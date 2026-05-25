@@ -57,18 +57,6 @@ async function useRedisAuthState(redisClient, sessionId) {
 const aiKey = process.env.GEMINI_API_KEY;
 const OWNER_NUMBER = process.env.OWNER_NUMBER || "967782541491";
 
-async function reserveAiQuota() {
-    let count = await redis.incrby('globalAiUsage', 1);
-    if (count === 1) await redis.expire('globalAiUsage', 86400);
-    
-    if (count > 20) {
-        await redis.decrby('globalAiUsage', 1);
-        return false;
-    }
-    return true;
-}
-
-// أضفنا متغير isOwnerMessage ليعرف البوت مع من يتحدث
 async function askGemini(jid, prompt, isOwnerMessage = false) {
     if (!aiKey) return '⚠️ الذكاء الاصطناعي غير مفعل.';
     
@@ -122,12 +110,13 @@ async function askGemini(jid, prompt, isOwnerMessage = false) {
         return reply;
     } catch (error) {
         if (error.message === 'TOO_LONG' || error.message === 'SAFETY_BLOCK') throw error;
-        throw new Error(error.response?.data?.error?.message || 'API_TIMEOUT');
+        let apiError = error.response?.data?.error?.message || 'API_TIMEOUT';
+        if (apiError.includes('Quota exceeded')) throw new Error('RATE_LIMIT');
+        throw new Error(apiError);
     }
 }
 
 const backupReplyText = `*ೃ⁀➷ 𝑨𝒎𝒆𝒓 𝑨𝒉𝒎𝒆𝒅 𖣘⚡*\n\n*ـ الحساب غير متوفر حالياً 📴*\n*ـ يرجى ترك رسالتك بوضوح وسأرد عليك فور تواجدي 🕕*\n*ـ ممنوع الاتصال منعاً للإحراج 📵*\n\n\`شكراً لوجودك وتفهمك العالي\` ✨`;
-const limitReachedText = `⚠️ نعتذر، لقد استنفذ البوت الحد الأقصى للردود المجانية المتاحة لهذا اليوم (20 رسالة). يرجى المحاولة غداً.`;
 
 const emojis = ['💚', '💙', '💜', '💛', '🧡', '🖤', '❤️‍🔥', '🔥', '✨', '⭐', '🌟', '💫', '⚡', '💥', '💯', '🚀', '👍', '🙌', '👏', '👌', '💪', '👑', '🥳', '🤩', '😎', '🧠', '🦁', '🦅', '🎯', '💎', '🎨', '🎬', '😇', '🙂', '😌', '😉'];
 const heartEmojis = ['❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '🩷', '🩶', '🩵'];
@@ -365,32 +354,21 @@ async function startBot() {
                         return;
                     }
 
-                    if (!queueData.isOwner) {
-                        const isQuotaReserved = await reserveAiQuota();
-                        if (!isQuotaReserved) {
-                            await sock.sendMessage(remoteJid, { text: limitReachedText });
-                            return;
-                        }
-                    }
-
                     processingUsers.add(queueKey);
 
                     try {
                         const targetContext = queueData.isOwner ? `owner_context_${remoteJid}` : remoteJid;
-                        // تم تمرير queueData.isOwner كمعامل ثالث ليعرف البوت أنك المالك
                         const responseText = await askGemini(targetContext, fullContext, queueData.isOwner); 
                         
                         await sock.sendMessage(remoteJid, { text: responseText }, queueData.isOwner ? { quoted: msg } : undefined); 
                         
                     } catch (e) { 
-                        if (!queueData.isOwner) {
-                            await redis.decrby('globalAiUsage', 1);
-                        }
-
                         if (e.message === 'TOO_LONG') {
                             await sock.sendMessage(remoteJid, { text: '⚠️ رسالتك طويلة جداً وتتجاوز الحد المسموح. يرجى اختصار النص والمحاولة مجدداً.' });
                         } else if (e.message === 'SAFETY_BLOCK') {
                             await sock.sendMessage(remoteJid, { text: '⚠️ عذراً، تم حظر هذا الطلب من قبل نظام الحماية لأنه يخالف سياسات المحتوى.' });
+                        } else if (e.message === 'RATE_LIMIT') {
+                            await sock.sendMessage(remoteJid, { text: '⏳ تجاوزت الحد الأقصى للطلبات السريعة للذكاء الاصطناعي. يرجى الانتظار لمدة دقيقة والمحاولة مجدداً.' });
                         } else {
                             let errorMsg = queueData.isOwner ? `⚠️ تفاصيل الخطأ: ${e.message}` : backupReplyText;
                             await sock.sendMessage(remoteJid, { text: errorMsg }); 
@@ -403,7 +381,8 @@ async function startBot() {
                 }
             };
 
-            let delayTime = queueData.isOwner ? 2000 : 7000;
+            // تم تغيير مدة الانتظار للناس إلى 15 ثانية (15000)
+            let delayTime = queueData.isOwner ? 2000 : 15000;
             if (queueData.timeout) clearTimeout(queueData.timeout);
             queueData.timeout = setTimeout(processQueue, delayTime);
         }
