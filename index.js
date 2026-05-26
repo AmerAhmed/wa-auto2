@@ -10,7 +10,10 @@ const PORT = process.env.PORT || 10000;
 const redis = new Redis(process.env.REDIS_URL);
 redis.on('error', (err) => console.error('⚠️ خطأ في اتصال Redis:', err));
 
-process.on('uncaughtException', (err) => console.error('Uncaught Exception:', err));
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+    process.exit(1); 
+});
 process.on('unhandledRejection', (reason, promise) => console.error('Unhandled Rejection at:', promise, 'reason:', reason));
 
 async function useRedisAuthState(redisClient, sessionId) {
@@ -68,9 +71,16 @@ async function askGemini(jid, prompt, isOwnerMessage = false) {
         let historyArray = await redis.lrange(`context:${jid}`, -10, -1);
         let modified = false;
         
-        while (historyArray.join('\n').length > 3000 && historyArray.length > 1) {
+        let fullHistoryStr = historyArray.join('\n');
+        while (fullHistoryStr.length > 3000 && historyArray.length > 1) {
             historyArray.shift(); 
             historyArray.shift(); 
+            fullHistoryStr = historyArray.join('\n');
+            modified = true;
+        }
+
+        if (historyArray.length === 1 && historyArray[0].length > 3000) {
+            historyArray[0] = historyArray[0].substring(historyArray[0].length - 3000);
             modified = true;
         }
 
@@ -156,11 +166,25 @@ async function startBot() {
     
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
+        
+        if (connection === 'connecting' && !sock.authState.creds.registered) {
+            setTimeout(async () => {
+                console.log("⏳ جارِ طلب كود الربط...");
+                try {
+                    let code = await sock.requestPairingCode(OWNER_NUMBER);
+                    console.log("🔥 الكود الحقيقي والمطابق هو: " + code);
+                } catch (e) {
+                    console.error("⚠️ خطأ في توليد كود الربط:", e.message);
+                }
+            }, 4000); 
+        }
+
         if (connection === 'open') {
             console.log('✅ البوت متصل ومستعد للعمل، الجلسة محفوظة بأمان في السحابة!');
         }
+        
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) {
@@ -170,34 +194,9 @@ async function startBot() {
         }
     });
 
-    setTimeout(async () => {
-        if (!sock.authState.creds.registered) {
-            console.log("⏳ جارِ طلب كود الربط...");
-            try {
-                let code = await sock.requestPairingCode(OWNER_NUMBER);
-                console.log("🔥 الكود الحقيقي والمطابق هو: " + code);
-            } catch (e) {
-                console.error("⚠️ خطأ في توليد كود الربط:", e.message);
-            }
-        }
-    }, 6000);
-
-    sock.ev.on('messages.update', (updates) => {
-        for (const { key, update } of updates) {
-            if (update.status === 4 || update.status === 'READ') {
-                const qKey = `user_${key.remoteJid}`;
-                if (messageQueue.has(qKey)) {
-                    clearTimeout(messageQueue.get(qKey).timeout);
-                    messageQueue.delete(qKey);
-                    processingUsers.delete(qKey);
-                }
-            }
-        }
-    });
-
     sock.ev.on('message-receipt.update', (updates) => {
         for (const receipt of updates) {
-            if (receipt.receipt?.receiptTimestamp || receipt.receipt?.type === 3 || receipt.receipt?.type === 'read') {
+            if (receipt.receipt?.type === 'read' || receipt.receipt?.type === 3) {
                 const qKey = `user_${receipt.key.remoteJid}`;
                 if (messageQueue.has(qKey)) {
                     clearTimeout(messageQueue.get(qKey).timeout);
@@ -336,6 +335,7 @@ async function startBot() {
             const processQueue = async () => {
                 try {
                     if (processingUsers.has(queueKey)) {
+                        if (queueData.timeout) clearTimeout(queueData.timeout);
                         queueData.timeout = setTimeout(processQueue, 2000);
                         return;
                     }
@@ -381,7 +381,6 @@ async function startBot() {
                 }
             };
 
-            // تم تغيير مدة الانتظار للناس إلى 15 ثانية (15000)
             let delayTime = queueData.isOwner ? 2000 : 15000;
             if (queueData.timeout) clearTimeout(queueData.timeout);
             queueData.timeout = setTimeout(processQueue, delayTime);
