@@ -5,7 +5,7 @@ const aiKey = process.env.GEMINI_API_KEY;
 
 async function askGemini(jid, prompt, isOwnerMessage = false) {
     if (!aiKey) return '⚠️ الذكاء الاصطناعي غير مفعل.';
-    
+
     if (prompt.length > 3000) {
         throw new Error('TOO_LONG');
     }
@@ -13,11 +13,11 @@ async function askGemini(jid, prompt, isOwnerMessage = false) {
     try {
         let historyArray = await redis.lrange(`context:${jid}`, -10, -1);
         let modified = false;
-        
+
         let fullHistoryStr = historyArray.join('\n');
         while (fullHistoryStr.length > 3000 && historyArray.length > 1) {
-            historyArray.shift(); 
-            historyArray.shift(); 
+            historyArray.shift();
+            historyArray.shift();
             fullHistoryStr = historyArray.join('\n');
             modified = true;
         }
@@ -31,25 +31,26 @@ async function askGemini(jid, prompt, isOwnerMessage = false) {
             await redis.del(`context:${jid}`);
             if (historyArray.length > 0) await redis.rpush(`context:${jid}`, ...historyArray);
         }
-        
+
         let systemInstruction = "";
-        
+
         if (isOwnerMessage) {
-            systemInstruction = "أنت الذكاء الاصطناعي الخاص والمساعد المباشر للمبرمج عامر. أنت الآن تتحدث مع عامر نفسه (المالك). أجب عليه مباشرة، نفذ أوامره بدقة، كن عملياً ومختصراً.\n\n";
+            systemInstruction = "أنت الذكاء الاصطناعي الخاص والمساعد المباشر للمبرمج عامر الخضمي. أنت الآن تتحدث مع عامر نفسه (المالك). أجب عليه مباشرة، نفذ أوامره بدقة، كن عملياً ومختصراً.\n\n";
         } else {
             systemInstruction = "تعليمات مساعدة لعامر:\n1. لا تخبر أحداً أنك مساعد أو ذكاء اصطناعي إلا إذا سألك مباشرة. حينها أخبره أنك مساعد عامر.\n2. قلد نفس أسلوب المتحدث في الطول والبرود أو المرح.\n3. أجب بشكل طبيعي كأنك تدردش عبر الواتساب.\n\n";
         }
-        
+
         let fullPrompt = systemInstruction + historyArray.join('\n') + '\nالمستخدم: ' + prompt;
 
+        // تم التغيير إلى gemini-flash-latest لضمان استقرار الاستدعاء 
         const response = await axios.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${aiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${aiKey}`,
             { contents: [{ parts: [{ text: fullPrompt }] }] },
             { headers: { 'Content-Type': 'application/json' }, timeout: 15000 }
         );
 
         const candidate = response.data.candidates[0];
-        
+
         if (candidate.finishReason === 'SAFETY' || !candidate.content) {
             throw new Error('SAFETY_BLOCK');
         }
@@ -57,7 +58,7 @@ async function askGemini(jid, prompt, isOwnerMessage = false) {
         const reply = candidate.content.parts[0].text;
 
         await redis.rpush(`context:${jid}`, `المستخدم: ${prompt}`, `أنت: ${reply}`);
-        await redis.ltrim(`context:${jid}`, -10, -1); 
+        await redis.ltrim(`context:${jid}`, -10, -1);
         await redis.expire(`context:${jid}`, 86400);
 
         return reply;

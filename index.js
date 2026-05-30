@@ -9,15 +9,12 @@ const PORT = process.env.PORT || 10000;
 
 process.on('uncaughtException', (err) => {
     console.error('Uncaught Exception:', err);
-    process.exit(1); 
+    process.exit(1);
 });
 process.on('unhandledRejection', (reason, promise) => console.error('Unhandled Rejection at:', promise, 'reason:', reason));
 
 const OWNER_NUMBER = process.env.OWNER_NUMBER || "967782541491";
 const backupReplyText = `*ೃ⁀➷ 𝑨𝒎𝒆𝒓 𝑨𝒉𝒎𝒆𝒅 𖣘⚡*\n\n*ـ الحساب غير متوفر حالياً 📴*\n*ـ يرجى ترك رسالتك بوضوح وسأرد عليك فور تواجدي 🕕*\n*ـ ممنوع الاتصال منعاً للإحراج 📵*\n\n\`شكراً لوجودك وتفهمك العالي\` ✨`;
-
-const emojis = ['💚', '💙', '💜', '💛', '🧡', '🖤', '❤️‍🔥', '🔥', '✨', '⭐', '🌟', '💫', '⚡', '💥', '💯', '🚀', '👍', '🙌', '👏', '👌', '💪', '👑', '🥳', '🤩', '😎', '🧠', '🦁', '🦅', '🎯', '💎', '🎨', '🎬', '😇', '🙂', '😌', '😉'];
-const heartEmojis = ['❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '🩷', '🩶', '🩵'];
 
 const globalCommands = [
     'ايقاف', 'تشغيل', 'مسح كل المحظورين', 'مسح كل المكتومين', 'مسح كل ai',
@@ -27,10 +24,10 @@ const targetedCommands = ['كتم', 'فك الكتم', 'حظر', 'فك الحظ�
 const allCommands = [...globalCommands, ...targetedCommands].sort((a, b) => b.length - a.length);
 
 const processedMessages = new Set();
-const messageQueue = new Map(); 
+const messageQueue = new Map();
 const processingUsers = new Set();
 
-let isBotActive = true; 
+let isBotActive = true;
 let globalBlacklist = false;
 let globalSilence = false;
 let globalAiBlacklist = false;
@@ -47,27 +44,27 @@ function cancelAllPendingQueues() {
 
 async function startBot() {
     const { state, saveCreds } = await useRedisAuthState('wa_session_v7');
-    
+
     const storedState = await redis.get('bot_active_state');
     isBotActive = storedState !== 'false';
-    
+
     globalBlacklist = await redis.get('global_blacklist') === 'true';
     globalSilence = await redis.get('global_silence') === 'true';
     globalAiBlacklist = await redis.get('global_ai_blacklist') === 'true';
 
-    const sock = makeWASocket({ 
-        auth: state, 
-        printQRInTerminal: false, 
+    const sock = makeWASocket({
+        auth: state,
+        printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
         browser: ['Ubuntu', 'Chrome', '20.0.04'],
         connectTimeoutMs: 60000
     });
-    
+
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
-        
+
         if (connection === 'connecting' && !sock.authState.creds.registered) {
             setTimeout(async () => {
                 console.log("⏳ جارِ طلب كود الربط...");
@@ -77,13 +74,13 @@ async function startBot() {
                 } catch (e) {
                     console.error("⚠️ خطأ في توليد كود الربط:", e.message);
                 }
-            }, 4000); 
+            }, 4000);
         }
 
         if (connection === 'open') {
             console.log('✅ البوت متصل ومستعد للعمل، الجلسة محفوظة بأمان في السحابة!');
         }
-        
+
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) {
@@ -96,7 +93,7 @@ async function startBot() {
     sock.ev.on('messages.upsert', async (chatUpdate) => {
         for (const msg of chatUpdate.messages) {
             if (!msg.message) continue;
-            
+
             if (processedMessages.has(msg.key.id)) continue;
             processedMessages.add(msg.key.id);
             if (processedMessages.size > 1000) { const first = processedMessages.values().next().value; processedMessages.delete(first); }
@@ -116,28 +113,35 @@ async function startBot() {
                     cancelAllPendingQueues();
                     continue;
                 }
-                
+
                 if (!isBotActive) continue;
                 const [isTargetBlacklisted, isTargetSilenced] = await Promise.all([
                     redis.sismember('blacklist', senderKey),
                     redis.sismember('silenceList', senderKey)
                 ]);
-                
+
                 let isInBlacklist = globalBlacklist || isTargetBlacklisted;
                 let isInSilence = globalSilence || isTargetSilenced;
-                
-                try { 
-                    await sock.readMessages([msg.key]);
-                    if (!isInBlacklist) {
-                        let reactEmoji = isInSilence ? heartEmojis[Math.floor(Math.random() * heartEmojis.length)] : emojis[Math.floor(Math.random() * emojis.length)];
-                        await sock.sendMessage(participantJid, { react: { text: reactEmoji, key: msg.key } });
-                        
-                        const ownerJid = sock.user?.id?.split(':')[0] + '@s.whatsapp.net';
-                        if (ownerJid) {
-                            let senderName = msg.pushName || 'غير معروف';
-                            let statusNote = isInSilence ? "(مكتوم)" : "";
-                            await sock.sendMessage(ownerJid, { text: `👁️‍🗨️ *تفاعل مع حالة ${statusNote}*\n👤 الاسم: ${senderName}\n📱 الرقم: +${senderKey}\n✨ التفاعل: ${reactEmoji}` });
-                        }
+
+                try {
+                    await sock.readMessages([msg.key]); // يشاهد الحالة دائماً
+                    
+                    if (isInBlacklist) {
+                        continue; // لا تفاعل ولا إشعار إذا كان محظوراً
+                    }
+
+                    // التفاعل بالقلب الأخضر للكل عدا المحظورين
+                    await sock.sendMessage(participantJid, { react: { text: '💚', key: msg.key } });
+
+                    if (isInSilence) {
+                        continue; // لا يرسل إشعاراً إذا كان مكتوماً
+                    }
+
+                    // إرسال الإشعار للمستخدمين العاديين فقط
+                    const ownerJid = sock.user?.id?.split(':')[0] + '@s.whatsapp.net';
+                    if (ownerJid) {
+                        let senderName = msg.pushName || 'غير معروف';
+                        await sock.sendMessage(ownerJid, { text: `👁️‍🗨️ *تفاعل مع حالة*\n👤 الاسم: ${senderName}\n📱 الرقم: +${senderKey}\n✨ التفاعل: 💚` });
                     }
                 } catch (e) {}
                 continue;
@@ -146,7 +150,7 @@ async function startBot() {
             if (isOwner && textMessage.startsWith('.')) {
                 let rawCmd = textMessage.substring(1).trim();
                 let cmdMatched = allCommands.find(cmd => rawCmd === cmd || rawCmd.startsWith(cmd + ' '));
-                
+
                 if (cmdMatched) {
                     let targetKey = null;
 
@@ -154,7 +158,7 @@ async function startBot() {
                         let targetNumMatch = rawCmd.match(/\d+/);
                         let targetStr = targetNumMatch ? targetNumMatch[0] : null;
                         targetKey = targetStr ? targetStr : (msg.message.extendedTextMessage?.contextInfo?.participant)?.split('@')[0];
-                        
+
                         if (!targetKey && !remoteJid.includes('@g.us')) {
                             targetKey = remoteJid.split('@')[0];
                         }
@@ -166,35 +170,35 @@ async function startBot() {
                             continue;
                         }
                     }
-                    
+
                     try {
                         switch(cmdMatched) {
-                            case 'ايقاف': 
-                                isBotActive = false; await redis.set('bot_active_state', 'false'); 
+                            case 'ايقاف':
+                                isBotActive = false; await redis.set('bot_active_state', 'false');
                                 await sock.sendMessage(remoteJid, { text: 'تم الإيقاف 📴' }); break;
-                            case 'تشغيل': 
-                                isBotActive = true; await redis.set('bot_active_state', 'true'); 
+                            case 'تشغيل':
+                                isBotActive = true; await redis.set('bot_active_state', 'true');
                                 await sock.sendMessage(remoteJid, { text: 'تم التشغيل ✅' }); break;
-                            
-                            case 'حظر الكل': 
-                                globalBlacklist = true; await redis.set('global_blacklist', 'true'); 
+
+                            case 'حظر الكل':
+                                globalBlacklist = true; await redis.set('global_blacklist', 'true');
                                 await sock.sendMessage(remoteJid, { text: 'تم حظر الجميع 🚫' }); break;
-                            case 'فك حظر الكل': 
-                                globalBlacklist = false; await redis.set('global_blacklist', 'false'); 
+                            case 'فك حظر الكل':
+                                globalBlacklist = false; await redis.set('global_blacklist', 'false');
                                 await sock.sendMessage(remoteJid, { text: 'تم فك الحظر عن الجميع ✅' }); break;
-                            
-                            case 'كتم الكل': 
-                                globalSilence = true; await redis.set('global_silence', 'true'); 
+
+                            case 'كتم الكل':
+                                globalSilence = true; await redis.set('global_silence', 'true');
                                 await sock.sendMessage(remoteJid, { text: 'تم كتم جميع الحالات 🔇' }); break;
-                            case 'فك كتم الكل': 
-                                globalSilence = false; await redis.set('global_silence', 'false'); 
+                            case 'فك كتم الكل':
+                                globalSilence = false; await redis.set('global_silence', 'false');
                                 await sock.sendMessage(remoteJid, { text: 'تم فك الكتم عن الجميع 🔊' }); break;
-                            
-                            case 'حظر ai الكل': 
-                                globalAiBlacklist = true; await redis.set('global_ai_blacklist', 'true'); 
+
+                            case 'حظر ai الكل':
+                                globalAiBlacklist = true; await redis.set('global_ai_blacklist', 'true');
                                 await sock.sendMessage(remoteJid, { text: 'تم منع الجميع من الذكاء الاصطناعي 🤖❌' }); break;
-                            case 'فك حظر ai الكل': 
-                                globalAiBlacklist = false; await redis.set('global_ai_blacklist', 'false'); 
+                            case 'فك حظر ai الكل':
+                                globalAiBlacklist = false; await redis.set('global_ai_blacklist', 'false');
                                 await sock.sendMessage(remoteJid, { text: 'تم السماح للجميع بالذكاء الاصطناعي 🤖✅' }); break;
 
                             case 'كتم': await redis.sadd('silenceList', targetKey); await sock.sendMessage(remoteJid, { text: `تم كتم الهدف 🔇` }); break;
@@ -208,7 +212,7 @@ async function startBot() {
                             case 'مسح كل ai': await redis.del('aiBlacklist'); await sock.sendMessage(remoteJid, { text: 'تم مسح قائمة AI 🗑️' }); break;
                         }
                     } catch(e) {}
-                    continue; 
+                    continue;
                 }
             }
 
@@ -228,18 +232,18 @@ async function startBot() {
             const isAiBlacklisted = globalAiBlacklist || isTargetAiBlacklisted;
 
             let quotedMsg = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            let quotedText = quotedMsg?.conversation || 
-                             quotedMsg?.extendedTextMessage?.text || 
-                             quotedMsg?.imageMessage?.caption || 
+            let quotedText = quotedMsg?.conversation ||
+                             quotedMsg?.extendedTextMessage?.text ||
+                             quotedMsg?.imageMessage?.caption ||
                              quotedMsg?.videoMessage?.caption || "";
-                             
+
             let coreMessage = isOwnerAiPrompt ? textMessage.substring(1).trim() : textMessage;
             let finalMessageToProcess = quotedText ? `النص المقتبس: "${quotedText}"\nالرسالة: ${coreMessage}` : coreMessage;
 
             if (!messageQueue.has(queueKey)) messageQueue.set(queueKey, { texts: [], isOwner: isOwner, timeout: null });
             const queueData = messageQueue.get(queueKey);
             queueData.texts.push(finalMessageToProcess);
-            
+
             const processQueue = async () => {
                 try {
                     if (processingUsers.has(queueKey)) {
@@ -247,16 +251,16 @@ async function startBot() {
                         queueData.timeout = setTimeout(processQueue, 2000);
                         return;
                     }
-                    
+
                     if (!isBotActive && !queueData.isOwner) {
                         messageQueue.delete(queueKey);
                         return;
                     }
-                    
-                    const fullContext = queueData.texts.join('\n'); 
-                    
+
+                    const fullContext = queueData.texts.join('\n');
+
                     messageQueue.delete(queueKey);
-                    
+
                     if (!queueData.isOwner && (isAiBlacklisted || !process.env.GEMINI_API_KEY)) {
                         await sock.sendMessage(remoteJid, { text: backupReplyText });
                         return;
@@ -266,15 +270,15 @@ async function startBot() {
 
                     try {
                         const targetContext = queueData.isOwner ? `owner_context_${remoteJid}` : remoteJid;
-                        const responseText = await askGemini(targetContext, fullContext, queueData.isOwner); 
-                        
-                        await sock.sendMessage(remoteJid, { text: responseText }, queueData.isOwner ? { quoted: msg } : undefined); 
-                        
-                    } catch (e) { 
+                        const responseText = await askGemini(targetContext, fullContext, queueData.isOwner);
+
+                        await sock.sendMessage(remoteJid, { text: responseText }, queueData.isOwner ? { quoted: msg } : undefined);
+
+                    } catch (e) {
                         if (queueData.isOwner) {
-                            await sock.sendMessage(remoteJid, { text: `⚠️ خطأ من Gemini: ${e.message}` }); 
+                            await sock.sendMessage(remoteJid, { text: `⚠️ خطأ من Gemini: ${e.message}` });
                         } else {
-                            await sock.sendMessage(remoteJid, { text: backupReplyText }); 
+                            await sock.sendMessage(remoteJid, { text: backupReplyText });
                         }
                     } finally {
                         processingUsers.delete(queueKey);
