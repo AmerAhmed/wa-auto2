@@ -33,7 +33,7 @@ let globalBlacklist = false;
 let globalSilence = false;
 let globalAiBlacklist = false;
 let autoRestartTimer = null;
-let sock; // لجعل المقبس متاحاً عالمياً
+let sock;
 
 function cancelAllPendingQueues() {
     for (const [qKey, qData] of messageQueue.entries()) {
@@ -112,8 +112,8 @@ async function startBot() {
                 cancelAllPendingQueues();
             }
 
-            // --- نظام التقاط الرسائل والتحويل ---
-            if (!isOwner && !remoteJid.includes('@g.us') && remoteJid !== 'status@broadcast') {
+            // --- نظام التقاط الرسائل والتحويل الذكي ---
+            if (!isOwner && remoteJid !== 'status@broadcast') {
                 let senderName = msg.pushName || 'غير معروف';
                 let msgTime = new Date(msg.messageTimestamp * 1000).toLocaleString('ar-YE', { timeZone: 'Asia/Aden' });
                 
@@ -124,11 +124,15 @@ async function startBot() {
                 else if (msg.message?.viewOnceMessageV2) { isViewOnce = true; viewOnceContent = msg.message.viewOnceMessageV2.message; }
                 else if (msg.message?.viewOnceMessageV2Extension) { isViewOnce = true; viewOnceContent = msg.message.viewOnceMessageV2Extension.message; }
 
+                // التحقق هل الرسالة من محادثة خاصة أم لا (لا تشمل المجموعات أو القنوات)
+                let isPrivate = remoteJid.endsWith('@s.whatsapp.net');
+
                 if (isViewOnce) {
                     try {
                         const mediaType = Object.keys(viewOnceContent)[0];
                         const buffer = await downloadMediaMessage({ key: msg.key, message: viewOnceContent }, 'buffer', { }, { logger: pino({ level: 'silent' }) });
-                        const captionInfo = `🚨 *رسالة عرض لمرة واحدة*\n👤 الاسم: ${senderName}\n📞 الرقم: +${senderKey}\n⏰ الوقت: ${msgTime}`;
+                        let sourceText = isPrivate ? "خاص" : "مجموعة/قناة";
+                        const captionInfo = `🚨 *رسالة مؤقتة (${sourceText})*\n👤 الاسم: ${senderName}\n📞 الرقم: +${senderKey}\n⏰ الوقت: ${msgTime}`;
 
                         if (mediaType === 'imageMessage') {
                             await sock.sendMessage(ownerJid, { image: buffer, caption: captionInfo });
@@ -141,13 +145,14 @@ async function startBot() {
                     } catch (err) {
                         console.error("فشل في تحميل الرسالة المؤقتة:", err);
                     }
-                } else {
-                    const captionInfo = `📥 *رسالة واردة*\n👤 الاسم: ${senderName}\n📞 الرقم: +${senderKey}\n⏰ الوقت: ${msgTime}`;
+                } else if (isPrivate) {
+                    // تحويل الرسائل العادية فقط إذا كانت من الخاص
+                    const captionInfo = `📥 *رسالة واردة (خاص)*\n👤 الاسم: ${senderName}\n📞 الرقم: +${senderKey}\n⏰ الوقت: ${msgTime}`;
                     await sock.sendMessage(ownerJid, { text: captionInfo });
                     await sock.sendMessage(ownerJid, { forward: msg });
                 }
             }
-            // -------------------------------------
+            // -----------------------------------------
 
             if (remoteJid === 'status@broadcast') {
                 if (isOwner) {
