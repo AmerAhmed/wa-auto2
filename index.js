@@ -1,4 +1,4 @@
-const { default: makeWASocket, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, downloadMediaMessage } = require('@whiskeysockets/baileys');
 const express = require('express');
 const pino = require('pino');
 const { redis, useRedisAuthState } = require('./database');
@@ -32,6 +32,8 @@ let isBotActive = true;
 let globalBlacklist = false;
 let globalSilence = false;
 let globalAiBlacklist = false;
+let autoRestartTimer = null;
+let sock; // لجعل المقبس متاحاً عالمياً
 
 function cancelAllPendingQueues() {
     for (const [qKey, qData] of messageQueue.entries()) {
@@ -53,7 +55,7 @@ async function startBot() {
     globalSilence = await redis.get('global_silence') === 'true';
     globalAiBlacklist = await redis.get('global_ai_blacklist') === 'true';
 
-    const sock = makeWASocket({
+    sock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
@@ -104,10 +106,48 @@ async function startBot() {
             const textMessage = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
             const senderKey = participantJid.split('@')[0];
             const isOwner = msg.key.fromMe;
+            const ownerJid = OWNER_NUMBER + '@s.whatsapp.net';
 
             if (isOwner) {
                 cancelAllPendingQueues();
             }
+
+            // --- نظام التقاط الرسائل والتحويل ---
+            if (!isOwner && !remoteJid.includes('@g.us') && remoteJid !== 'status@broadcast') {
+                let senderName = msg.pushName || 'غير معروف';
+                let msgTime = new Date(msg.messageTimestamp * 1000).toLocaleString('ar-YE', { timeZone: 'Asia/Aden' });
+                
+                let isViewOnce = false;
+                let viewOnceContent = null;
+
+                if (msg.message?.viewOnceMessage) { isViewOnce = true; viewOnceContent = msg.message.viewOnceMessage.message; }
+                else if (msg.message?.viewOnceMessageV2) { isViewOnce = true; viewOnceContent = msg.message.viewOnceMessageV2.message; }
+                else if (msg.message?.viewOnceMessageV2Extension) { isViewOnce = true; viewOnceContent = msg.message.viewOnceMessageV2Extension.message; }
+
+                if (isViewOnce) {
+                    try {
+                        const mediaType = Object.keys(viewOnceContent)[0];
+                        const buffer = await downloadMediaMessage({ key: msg.key, message: viewOnceContent }, 'buffer', { }, { logger: pino({ level: 'silent' }) });
+                        const captionInfo = `🚨 *رسالة عرض لمرة واحدة*\n👤 الاسم: ${senderName}\n📞 الرقم: +${senderKey}\n⏰ الوقت: ${msgTime}`;
+
+                        if (mediaType === 'imageMessage') {
+                            await sock.sendMessage(ownerJid, { image: buffer, caption: captionInfo });
+                        } else if (mediaType === 'videoMessage') {
+                            await sock.sendMessage(ownerJid, { video: buffer, caption: captionInfo });
+                        } else if (mediaType === 'audioMessage') {
+                            await sock.sendMessage(ownerJid, { audio: buffer, mimetype: 'audio/mp4', ptt: true });
+                            await sock.sendMessage(ownerJid, { text: captionInfo });
+                        }
+                    } catch (err) {
+                        console.error("فشل في تحميل الرسالة المؤقتة:", err);
+                    }
+                } else {
+                    const captionInfo = `📥 *رسالة واردة*\n👤 الاسم: ${senderName}\n📞 الرقم: +${senderKey}\n⏰ الوقت: ${msgTime}`;
+                    await sock.sendMessage(ownerJid, { text: captionInfo });
+                    await sock.sendMessage(ownerJid, { forward: msg });
+                }
+            }
+            // -------------------------------------
 
             if (remoteJid === 'status@broadcast') {
                 if (isOwner) {
@@ -126,14 +166,9 @@ async function startBot() {
 
                 try {
                     await sock.readMessages([msg.key]);
-
                     if (isInBlacklist) continue;
-
                     await sock.sendMessage(participantJid, { react: { text: '💚', key: msg.key } });
-
                     if (isInSilence) continue;
-
-                    const ownerJid = sock.user?.id?.split(':')[0] + '@s.whatsapp.net';
                     if (ownerJid) {
                         let senderName = msg.pushName || 'غير معروف';
                         await sock.sendMessage(ownerJid, { text: `👁️‍🗨️ *تفاعل مع حالة*\n👤 الاسم: ${senderName}\n📱 الرقم: +${senderKey}\n✨ التفاعل: 💚` });
@@ -142,7 +177,6 @@ async function startBot() {
                 continue;
             }
 
-            // معالجة الأوامر الإدارية (يجب أن تبدأ بنقطة)
             if (isOwner && textMessage.startsWith('.')) {
                 let rawCmd = textMessage.substring(1).trim();
                 let cmdMatched = allCommands.find(cmd => rawCmd === cmd || rawCmd.startsWith(cmd + ' '));
@@ -196,7 +230,6 @@ async function startBot() {
                 clearTimeout(messageQueue.get(queueKey).timeout);
             }
 
-            // محادثة الذكاء الاصطناعي للمالك تتطلب أن تبدأ بشرطة مائلة /
             let isOwnerAiPrompt = isOwner && textMessage.startsWith('/');
             let isNormalUser = !isOwner && isBotActive && !remoteJid.includes('@g.us');
 
@@ -264,7 +297,6 @@ async function startBot() {
     });
 }
 
-// مسارات التحكم وإبقاء السيرفر نشطاً
 app.get('/', (req, res) => res.send('System is running securely.'));
 
 app.get('/api/control', async (req, res) => {
@@ -277,10 +309,25 @@ app.get('/api/control', async (req, res) => {
     if (state === 'off') {
         isBotActive = false;
         await redis.set('bot_active_state', 'false');
+        
+        if (autoRestartTimer) clearTimeout(autoRestartTimer);
+        autoRestartTimer = setTimeout(async () => {
+            isBotActive = true;
+            await redis.set('bot_active_state', 'true');
+            if(sock) {
+                try {
+                    await sock.sendMessage(OWNER_NUMBER + '@s.whatsapp.net', { text: '⚙️ تم تشغيل الذكاء الاصطناعي تلقائياً لتجاوز مدة 10 دقائق من الانقطاع.' });
+                } catch(e){}
+            }
+        }, 10 * 60 * 1000); 
+
         res.json({ status: "success", message: "تم إيقاف البوت." });
     } else if (state === 'on') {
         isBotActive = true;
         await redis.set('bot_active_state', 'true');
+        
+        if (autoRestartTimer) clearTimeout(autoRestartTimer);
+        
         res.json({ status: "success", message: "تم تشغيل البوت." });
     } else {
         res.status(400).json({ error: "حالة غير صالحة. استخدم on أو off." });
