@@ -69,26 +69,17 @@ async function startBot() {
 
         if (connection === 'connecting' && !sock.authState.creds.registered) {
             setTimeout(async () => {
-                console.log("⏳ جارِ طلب كود الربط...");
-                try {
-                    let code = await sock.requestPairingCode(OWNER_NUMBER);
-                    console.log("🔥 الكود الحقيقي والمطابق هو: " + code);
-                } catch (e) {
-                    console.error("⚠️ خطأ في توليد كود الربط:", e.message);
-                }
+                try { await sock.requestPairingCode(OWNER_NUMBER); } catch (e) {}
             }, 4000);
         }
 
         if (connection === 'open') {
-            console.log('✅ البوت متصل ومستعد للعمل، الجلسة محفوظة بأمان في السحابة!');
+            console.log('✅ البوت متصل ومستعد للعمل!');
         }
 
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) {
-                console.log('جارِ إعادة الاتصال بعد 5 ثوانٍ...');
-                setTimeout(startBot, 5000);
-            }
+            if (shouldReconnect) setTimeout(startBot, 5000);
         }
     });
 
@@ -103,7 +94,6 @@ async function startBot() {
             const remoteJid = msg.key.remoteJid;
             const participantJid = msg.key.participant || msg.participant || remoteJid;
             
-            // فك تغليف الرسائل ذاتية الاختفاء والمرفقات للوصول للنص الحقيقي
             let actualMsg = msg.message?.ephemeralMessage?.message || msg.message?.documentWithCaptionMessage?.message || msg.message;
             const textMessage = actualMsg?.conversation || actualMsg?.extendedTextMessage?.text || actualMsg?.imageMessage?.caption || actualMsg?.videoMessage?.caption || "";
             
@@ -111,30 +101,22 @@ async function startBot() {
             const isOwner = msg.key.fromMe;
             const ownerJid = OWNER_NUMBER + '@s.whatsapp.net';
 
-            if (isOwner) {
-                cancelAllPendingQueues();
-            }
+            if (isOwner) cancelAllPendingQueues();
 
+            // نظام تحويل الرسائل الجديد والآمن
             try {
                 if (!isOwner && remoteJid !== 'status@broadcast' && remoteJid !== ownerJid) {
                     let senderName = msg.pushName || 'غير معروف';
-                    let msgTime = new Date(msg.messageTimestamp * 1000).toLocaleString('ar-YE', { timeZone: 'Asia/Aden' });
-
-                    let isViewOnce = false;
-                    let viewOnceContent = null;
-
-                    if (msg.message?.viewOnceMessage) { isViewOnce = true; viewOnceContent = msg.message.viewOnceMessage.message; }
-                    else if (msg.message?.viewOnceMessageV2) { isViewOnce = true; viewOnceContent = msg.message.viewOnceMessageV2.message; }
-                    else if (msg.message?.viewOnceMessageV2Extension) { isViewOnce = true; viewOnceContent = msg.message.viewOnceMessageV2Extension.message; }
-
+                    let isViewOnce = !!(msg.message?.viewOnceMessage || msg.message?.viewOnceMessageV2 || msg.message?.viewOnceMessageV2Extension);
                     let isPrivate = remoteJid.endsWith('@s.whatsapp.net');
 
                     if (isViewOnce) {
+                        let viewOnceContent = msg.message?.viewOnceMessage?.message || msg.message?.viewOnceMessageV2?.message || msg.message?.viewOnceMessageV2Extension?.message;
                         try {
                             const mediaType = Object.keys(viewOnceContent)[0];
                             const buffer = await downloadMediaMessage({ key: msg.key, message: viewOnceContent }, 'buffer', { }, { logger: pino({ level: 'silent' }) });
-                            let sourceText = isPrivate ? "خاص" : "مجموعة/قناة";
-                            const captionInfo = `🚨 *رسالة مؤقتة (${sourceText})*\n👤 الاسم: ${senderName}\n📞 الرقم: +${senderKey}\n⏰ الوقت: ${msgTime}`;
+                            let sourceText = isPrivate ? "خاص" : "مجموعة";
+                            const captionInfo = `🚨 *مؤقتة (${sourceText})*\n👤 الاسم: ${senderName}\n📞 الرقم: +${senderKey}`;
 
                             if (mediaType === 'imageMessage') {
                                 await sock.sendMessage(ownerJid, { image: buffer, caption: captionInfo });
@@ -145,28 +127,37 @@ async function startBot() {
                                 await sock.sendMessage(ownerJid, { text: captionInfo });
                             }
                         } catch (err) {
-                            await sock.sendMessage(ownerJid, { text: `⚠️ *تنبيه:* وصلت رسالة مؤقتة من +${senderKey} ولكن فشل السيرفر في تحميلها.` });
+                            await sock.sendMessage(ownerJid, { text: `⚠️ تنبيه: رسالة مؤقتة من +${senderKey} فشل تحميلها.` });
                         }
                     } else if (isPrivate) {
-                        const captionInfo = `📥 *رسالة واردة (خاص)*\n👤 الاسم: ${senderName}\n📞 الرقم: +${senderKey}\n⏰ الوقت: ${msgTime}`;
-                        try {
-                            await sock.sendMessage(ownerJid, { text: captionInfo });
-                            await sock.sendMessage(ownerJid, { forward: msg });
-                        } catch(forwardErr) {
-                            // بديل موثوق يعتمد على النص المستخرج إذا رفض السيرفر أمر التحويل الخام
-                            let fallbackText = textMessage ? `محتوى النص:\n${textMessage}` : `[هذه الرسالة عبارة عن ملصق أو وسائط معقدة لم يتمكن البوت من تحويلها مباشرة]`;
-                            await sock.sendMessage(ownerJid, { text: `⚠️ فشل التحويل المباشر للرسالة.\n${fallbackText}` });
+                        // إرسال النص الصريح كأولوية قصوى لضمان وصول التنبيه
+                        let infoText = `📥 *رسالة خاصة*\n👤 من: ${senderName}\n📞 رقم: +${senderKey}\n`;
+                        
+                        if (textMessage) {
+                            infoText += `\n*النص:*\n${textMessage}`;
+                        } else {
+                            infoText += `\n*[ملصق أو وسائط]*`;
+                        }
+
+                        // إرسال الرسالة كنص مباشر إليك (لا يمكن أن تفشل)
+                        await sock.sendMessage(ownerJid, { text: infoText });
+
+                        // إذا كان هناك وسائط (صورة/فيديو/صوت/ملصق)، نحاول تحويلها
+                        let hasMedia = actualMsg?.imageMessage || actualMsg?.videoMessage || actualMsg?.audioMessage || actualMsg?.documentMessage || actualMsg?.stickerMessage;
+                        if (hasMedia) {
+                            try {
+                                await sock.sendMessage(ownerJid, { forward: msg });
+                            } catch(e) {}
                         }
                     }
                 }
             } catch (mainErr) {
-                console.error("خطأ عام في نظام التحويل:", mainErr);
+                console.error("خطأ عام في التحويل:", mainErr);
             }
 
             if (remoteJid === 'status@broadcast') {
-                if (isOwner) continue;
-
-                if (!isBotActive) continue;
+                if (isOwner || !isBotActive) continue;
+                
                 const [isTargetBlacklisted, isTargetSilenced] = await Promise.all([
                     redis.sismember('blacklist', senderKey),
                     redis.sismember('silenceList', senderKey)
@@ -205,7 +196,7 @@ async function startBot() {
                         }
 
                         if (!targetKey || targetKey.includes('@g.us')) {
-                            try { await sock.sendMessage(remoteJid, { text: '⚠️ لم يتم تحديد هدف صالح أو لا يمكن تنفيذ الأمر على مجموعة.' }); } catch(e) {}
+                            try { await sock.sendMessage(remoteJid, { text: '⚠️ لم يتم تحديد هدف صالح.' }); } catch(e) {}
                             continue;
                         }
                     }
@@ -218,17 +209,17 @@ async function startBot() {
                             case 'فك حظر الكل': globalBlacklist = false; await redis.set('global_blacklist', 'false'); await sock.sendMessage(remoteJid, { text: 'تم فك الحظر عن الجميع ✅' }); break;
                             case 'كتم الكل': globalSilence = true; await redis.set('global_silence', 'true'); await sock.sendMessage(remoteJid, { text: 'تم كتم جميع الحالات 🔇' }); break;
                             case 'فك كتم الكل': globalSilence = false; await redis.set('global_silence', 'false'); await sock.sendMessage(remoteJid, { text: 'تم فك الكتم عن الجميع 🔊' }); break;
-                            case 'حظر ai الكل': globalAiBlacklist = true; await redis.set('global_ai_blacklist', 'true'); await sock.sendMessage(remoteJid, { text: 'تم منع الجميع من الذكاء الاصطناعي 🤖❌' }); break;
-                            case 'فك حظر ai الكل': globalAiBlacklist = false; await redis.set('global_ai_blacklist', 'false'); await sock.sendMessage(remoteJid, { text: 'تم السماح للجميع بالذكاء الاصطناعي 🤖✅' }); break;
+                            case 'حظر ai الكل': globalAiBlacklist = true; await redis.set('global_ai_blacklist', 'true'); await sock.sendMessage(remoteJid, { text: 'تم منع الجميع من AI 🤖❌' }); break;
+                            case 'فك حظر ai الكل': globalAiBlacklist = false; await redis.set('global_ai_blacklist', 'false'); await sock.sendMessage(remoteJid, { text: 'تم السماح للجميع بـ AI 🤖✅' }); break;
                             case 'كتم': await redis.sadd('silenceList', targetKey); await sock.sendMessage(remoteJid, { text: `تم كتم الهدف 🔇` }); break;
                             case 'فك الكتم': await redis.srem('silenceList', targetKey); await sock.sendMessage(remoteJid, { text: `تم فك الكتم 🔊` }); break;
-                            case 'حظر ai': await redis.sadd('aiBlacklist', targetKey); await sock.sendMessage(remoteJid, { text: `تم منعه من الذكاء الاصطناعي 🤖❌` }); break;
-                            case 'فك حظر ai': await redis.srem('aiBlacklist', targetKey); await sock.sendMessage(remoteJid, { text: `تم السماح له بالذكاء الاصطناعي 🤖✅` }); break;
+                            case 'حظر ai': await redis.sadd('aiBlacklist', targetKey); await sock.sendMessage(remoteJid, { text: `تم منعه من AI 🤖❌` }); break;
+                            case 'فك حظر ai': await redis.srem('aiBlacklist', targetKey); await sock.sendMessage(remoteJid, { text: `تم السماح له بـ AI 🤖✅` }); break;
                             case 'حظر': await redis.sadd('blacklist', targetKey); await sock.sendMessage(remoteJid, { text: `تم حظر الهدف 🚫` }); break;
                             case 'فك الحظر': await redis.srem('blacklist', targetKey); await sock.sendMessage(remoteJid, { text: `تم فك الحظر ✅` }); break;
-                            case 'مسح كل المحظورين': await redis.del('blacklist'); await sock.sendMessage(remoteJid, { text: 'تم مسح المحظورين 🗑️' }); break;
-                            case 'مسح كل المكتومين': await redis.del('silenceList'); await sock.sendMessage(remoteJid, { text: 'تم مسح المكتومين 🗑️' }); break;
-                            case 'مسح كل ai': await redis.del('aiBlacklist'); await sock.sendMessage(remoteJid, { text: 'تم مسح قائمة AI 🗑️' }); break;
+                            case 'مسح كل المحظورين': await redis.del('blacklist'); await sock.sendMessage(remoteJid, { text: 'تم المسح 🗑️' }); break;
+                            case 'مسح كل المكتومين': await redis.del('silenceList'); await sock.sendMessage(remoteJid, { text: 'تم المسح 🗑️' }); break;
+                            case 'مسح كل ai': await redis.del('aiBlacklist'); await sock.sendMessage(remoteJid, { text: 'تم المسح 🗑️' }); break;
                         }
                     } catch(e) {}
                     continue;
@@ -236,10 +227,7 @@ async function startBot() {
             }
 
             const queueKey = isOwner ? `owner_${remoteJid}` : `user_${remoteJid}`;
-
-            if (isOwner && messageQueue.has(queueKey)) {
-                clearTimeout(messageQueue.get(queueKey).timeout);
-            }
+            if (isOwner && messageQueue.has(queueKey)) clearTimeout(messageQueue.get(queueKey).timeout);
 
             let isOwnerAiPrompt = isOwner && textMessage.startsWith('/');
             let isNormalUser = !isOwner && isBotActive && !remoteJid.includes('@g.us');
@@ -312,36 +300,25 @@ app.get('/', (req, res) => res.send('System is running securely.'));
 
 app.get('/api/control', async (req, res) => {
     const { state, key } = req.query;
-
-    if (key !== WEBHOOK_KEY) {
-        return res.status(403).json({ error: "مفتاح المصادقة غير صالح." });
-    }
+    if (key !== WEBHOOK_KEY) return res.status(403).json({ error: "مفتاح المصادقة غير صالح." });
 
     if (state === 'off') {
         isBotActive = false;
         await redis.set('bot_active_state', 'false');
-
         if (autoRestartTimer) clearTimeout(autoRestartTimer);
         autoRestartTimer = setTimeout(async () => {
             isBotActive = true;
             await redis.set('bot_active_state', 'true');
-            if(sock) {
-                try {
-                    await sock.sendMessage(OWNER_NUMBER + '@s.whatsapp.net', { text: '⚙️ تم تشغيل الذكاء الاصطناعي تلقائياً لتجاوز مدة 10 دقائق من الانقطاع.' });
-                } catch(e){}
-            }
+            if(sock) { try { await sock.sendMessage(OWNER_NUMBER + '@s.whatsapp.net', { text: '⚙️ تم تشغيل الذكاء الاصطناعي تلقائياً.' }); } catch(e){} }
         }, 10 * 60 * 1000);
-
-        res.json({ status: "success", message: "تم إيقاف البوت." });
+        res.json({ status: "success", message: "تم الإيقاف." });
     } else if (state === 'on') {
         isBotActive = true;
         await redis.set('bot_active_state', 'true');
-
         if (autoRestartTimer) clearTimeout(autoRestartTimer);
-
-        res.json({ status: "success", message: "تم تشغيل البوت." });
+        res.json({ status: "success", message: "تم التشغيل." });
     } else {
-        res.status(400).json({ error: "حالة غير صالحة. استخدم on أو off." });
+        res.status(400).json({ error: "حالة غير صالحة." });
     }
 });
 
