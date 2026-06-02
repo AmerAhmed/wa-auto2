@@ -10,7 +10,6 @@ const WEBHOOK_KEY = process.env.WEBHOOK_KEY || "amer123";
 
 process.on('uncaughtException', (err) => {
     console.error('Uncaught Exception:', err);
-    process.exit(1);
 });
 process.on('unhandledRejection', (reason, promise) => console.error('Unhandled Rejection at:', promise, 'reason:', reason));
 
@@ -103,7 +102,11 @@ async function startBot() {
 
             const remoteJid = msg.key.remoteJid;
             const participantJid = msg.key.participant || msg.participant || remoteJid;
-            const textMessage = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+            
+            // فك تغليف الرسائل ذاتية الاختفاء والمرفقات للوصول للنص الحقيقي
+            let actualMsg = msg.message?.ephemeralMessage?.message || msg.message?.documentWithCaptionMessage?.message || msg.message;
+            const textMessage = actualMsg?.conversation || actualMsg?.extendedTextMessage?.text || actualMsg?.imageMessage?.caption || actualMsg?.videoMessage?.caption || "";
+            
             const senderKey = participantJid.split('@')[0];
             const isOwner = msg.key.fromMe;
             const ownerJid = OWNER_NUMBER + '@s.whatsapp.net';
@@ -112,13 +115,11 @@ async function startBot() {
                 cancelAllPendingQueues();
             }
 
-            // --- نظام التقاط الرسائل والتحويل المحمي (Try-Catch) ---
             try {
-                // نمنع تحويل الرسائل إذا كان المرسل هو أنت أو إذا كانت حالة، لمنع التكرار
                 if (!isOwner && remoteJid !== 'status@broadcast' && remoteJid !== ownerJid) {
                     let senderName = msg.pushName || 'غير معروف';
                     let msgTime = new Date(msg.messageTimestamp * 1000).toLocaleString('ar-YE', { timeZone: 'Asia/Aden' });
-                    
+
                     let isViewOnce = false;
                     let viewOnceContent = null;
 
@@ -149,12 +150,10 @@ async function startBot() {
                     } else if (isPrivate) {
                         const captionInfo = `📥 *رسالة واردة (خاص)*\n👤 الاسم: ${senderName}\n📞 الرقم: +${senderKey}\n⏰ الوقت: ${msgTime}`;
                         try {
-                            // إرسال معلومات المرسل أولاً
                             await sock.sendMessage(ownerJid, { text: captionInfo });
-                            // محاولة تحويل الرسالة الأصلية
                             await sock.sendMessage(ownerJid, { forward: msg });
                         } catch(forwardErr) {
-                            // إذا فشل التحويل (بسبب نوع الوسائط)، نرسل نص الرسالة كبديل
+                            // بديل موثوق يعتمد على النص المستخرج إذا رفض السيرفر أمر التحويل الخام
                             let fallbackText = textMessage ? `محتوى النص:\n${textMessage}` : `[هذه الرسالة عبارة عن ملصق أو وسائط معقدة لم يتمكن البوت من تحويلها مباشرة]`;
                             await sock.sendMessage(ownerJid, { text: `⚠️ فشل التحويل المباشر للرسالة.\n${fallbackText}` });
                         }
@@ -163,13 +162,9 @@ async function startBot() {
             } catch (mainErr) {
                 console.error("خطأ عام في نظام التحويل:", mainErr);
             }
-            // -----------------------------------------
 
             if (remoteJid === 'status@broadcast') {
-                if (isOwner) {
-                    cancelAllPendingQueues();
-                    continue;
-                }
+                if (isOwner) continue;
 
                 if (!isBotActive) continue;
                 const [isTargetBlacklisted, isTargetSilenced] = await Promise.all([
@@ -203,7 +198,7 @@ async function startBot() {
                     if (targetedCommands.includes(cmdMatched)) {
                         let targetNumMatch = rawCmd.match(/\d+/);
                         let targetStr = targetNumMatch ? targetNumMatch[0] : null;
-                        targetKey = targetStr ? targetStr : (msg.message.extendedTextMessage?.contextInfo?.participant)?.split('@')[0];
+                        targetKey = targetStr ? targetStr : (actualMsg?.contextInfo?.participant)?.split('@')[0];
 
                         if (!targetKey && !remoteJid.includes('@g.us')) {
                             targetKey = remoteJid.split('@')[0];
@@ -255,7 +250,7 @@ async function startBot() {
             const isTargetAiBlacklisted = await redis.sismember('aiBlacklist', senderKey);
             const isAiBlacklisted = globalAiBlacklist || isTargetAiBlacklisted;
 
-            let quotedMsg = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            let quotedMsg = actualMsg?.contextInfo?.quotedMessage;
             let quotedText = quotedMsg?.conversation || quotedMsg?.extendedTextMessage?.text || quotedMsg?.imageMessage?.caption || quotedMsg?.videoMessage?.caption || "";
 
             let coreMessage = isOwnerAiPrompt ? textMessage.substring(1).trim() : textMessage;
@@ -317,7 +312,7 @@ app.get('/', (req, res) => res.send('System is running securely.'));
 
 app.get('/api/control', async (req, res) => {
     const { state, key } = req.query;
-    
+
     if (key !== WEBHOOK_KEY) {
         return res.status(403).json({ error: "مفتاح المصادقة غير صالح." });
     }
@@ -325,7 +320,7 @@ app.get('/api/control', async (req, res) => {
     if (state === 'off') {
         isBotActive = false;
         await redis.set('bot_active_state', 'false');
-        
+
         if (autoRestartTimer) clearTimeout(autoRestartTimer);
         autoRestartTimer = setTimeout(async () => {
             isBotActive = true;
@@ -335,15 +330,15 @@ app.get('/api/control', async (req, res) => {
                     await sock.sendMessage(OWNER_NUMBER + '@s.whatsapp.net', { text: '⚙️ تم تشغيل الذكاء الاصطناعي تلقائياً لتجاوز مدة 10 دقائق من الانقطاع.' });
                 } catch(e){}
             }
-        }, 10 * 60 * 1000); 
+        }, 10 * 60 * 1000);
 
         res.json({ status: "success", message: "تم إيقاف البوت." });
     } else if (state === 'on') {
         isBotActive = true;
         await redis.set('bot_active_state', 'true');
-        
+
         if (autoRestartTimer) clearTimeout(autoRestartTimer);
-        
+
         res.json({ status: "success", message: "تم تشغيل البوت." });
     } else {
         res.status(400).json({ error: "حالة غير صالحة. استخدم on أو off." });

@@ -42,9 +42,8 @@ async function askGemini(jid, prompt, isOwnerMessage = false) {
 
         let fullPrompt = systemInstruction + historyArray.join('\n') + '\nالمستخدم: ' + prompt;
 
-        // تم التغيير إلى gemini-flash-latest لضمان استقرار الاستدعاء 
         const response = await axios.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${aiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${aiKey}`,
             { contents: [{ parts: [{ text: fullPrompt }] }] },
             { headers: { 'Content-Type': 'application/json' }, timeout: 15000 }
         );
