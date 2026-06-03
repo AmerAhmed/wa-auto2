@@ -148,7 +148,7 @@ async function startBot() {
                             await sock.sendMessage(ownerJid, { text: `⚠️ تنبيه: رسالة مؤقتة من +${senderKey} فشل تحميلها.` });
                         }
                     } else if (isPrivate) {
-                        // إرسال النص الصريح كأولوية قصوى لضمان وصول التنبيه
+                        // إرسال النص الصريح كأولوية قصوى لضشان وصول التنبيه
                         let infoText = `📥 *رسالة خاصة*\n👤 من: ${senderName}\n📞 رقم: +${senderKey}\n`;
                         
                         if (textMessage) {
