@@ -107,14 +107,30 @@ async function startBot() {
             try {
                 if (!isOwner && remoteJid !== 'status@broadcast' && remoteJid !== ownerJid) {
                     let senderName = msg.pushName || 'غير معروف';
-                    let isViewOnce = !!(msg.message?.viewOnceMessage || msg.message?.viewOnceMessageV2 || msg.message?.viewOnceMessageV2Extension);
                     let isPrivate = remoteJid.endsWith('@s.whatsapp.net');
 
+                    // استخراج محتوى المشاهدة لمرة واحدة بشكل مضمون سواء كانت المحادثة عادية أو ذاتية الاختفاء
+                    let viewOnceContent = msg.message?.viewOnceMessage?.message || 
+                                          msg.message?.viewOnceMessageV2?.message || 
+                                          msg.message?.viewOnceMessageV2Extension?.message ||
+                                          actualMsg?.viewOnceMessage?.message ||
+                                          actualMsg?.viewOnceMessageV2?.message ||
+                                          actualMsg?.viewOnceMessageV2Extension?.message;
+
+                    let isViewOnce = !!viewOnceContent;
+
                     if (isViewOnce) {
-                        let viewOnceContent = msg.message?.viewOnceMessage?.message || msg.message?.viewOnceMessageV2?.message || msg.message?.viewOnceMessageV2Extension?.message;
                         try {
                             const mediaType = Object.keys(viewOnceContent)[0];
-                            const buffer = await downloadMediaMessage({ key: msg.key, message: viewOnceContent }, 'buffer', { }, { logger: pino({ level: 'silent' }) });
+                            
+                            // تمرير الهيكل الصحيح للدالة لضمان نجاح تحميل السيرفر للوسائط
+                            const buffer = await downloadMediaMessage(
+                                { key: msg.key, message: msg.message?.ephemeralMessage?.message || msg.message }, 
+                                'buffer', 
+                                { }, 
+                                { logger: pino({ level: 'silent' }) }
+                            );
+                            
                             let sourceText = isPrivate ? "خاص" : "مجموعة";
                             const captionInfo = `🚨 *مؤقتة (${sourceText})*\n👤 الاسم: ${senderName}\n📞 الرقم: +${senderKey}`;
 
@@ -123,10 +139,12 @@ async function startBot() {
                             } else if (mediaType === 'videoMessage') {
                                 await sock.sendMessage(ownerJid, { video: buffer, caption: captionInfo });
                             } else if (mediaType === 'audioMessage') {
+                                // معالجة الرسائل الصوتية للمشاهدة مرة واحدة
                                 await sock.sendMessage(ownerJid, { audio: buffer, mimetype: 'audio/mp4', ptt: true });
                                 await sock.sendMessage(ownerJid, { text: captionInfo });
                             }
                         } catch (err) {
+                            console.error("خطأ في تحميل المادة المؤقتة:", err);
                             await sock.sendMessage(ownerJid, { text: `⚠️ تنبيه: رسالة مؤقتة من +${senderKey} فشل تحميلها.` });
                         }
                     } else if (isPrivate) {
@@ -139,10 +157,8 @@ async function startBot() {
                             infoText += `\n*[ملصق أو وسائط]*`;
                         }
 
-                        // إرسال الرسالة كنص مباشر إليك (لا يمكن أن تفشل)
                         await sock.sendMessage(ownerJid, { text: infoText });
 
-                        // إذا كان هناك وسائط (صورة/فيديو/صوت/ملصق)، نحاول تحويلها
                         let hasMedia = actualMsg?.imageMessage || actualMsg?.videoMessage || actualMsg?.audioMessage || actualMsg?.documentMessage || actualMsg?.stickerMessage;
                         if (hasMedia) {
                             try {
