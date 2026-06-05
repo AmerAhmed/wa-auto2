@@ -45,7 +45,8 @@ function cancelAllPendingQueues() {
 }
 
 async function startBot() {
-    const { state, saveCreds } = await useRedisAuthState('wa_session_v8');
+    // 💡 تم التغيير إلى v9 لفرض إنشاء جلسة نظيفة خالية من الأخطاء العالقة في Redis
+    const { state, saveCreds } = await useRedisAuthState('wa_session_v9');
 
     const storedState = await redis.get('bot_active_state');
     isBotActive = storedState !== 'false';
@@ -64,19 +65,25 @@ async function startBot() {
 
     sock.ev.on('creds.update', saveCreds);
 
+    let pairingCodeRequested = false;
+
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
 
-        if (connection === 'connecting' && !sock.authState.creds.registered) {
+        // 💡 إضافة شرط pairingCodeRequested لمنع إرسال طلبات متكررة تتسبب في إغلاق الاتصال
+        if (connection === 'connecting' && !sock.authState.creds.registered && !pairingCodeRequested) {
+            pairingCodeRequested = true;
             setTimeout(async () => {
                 console.log("⏳ جارِ طلب كود الربط...");
                 try { 
-                    let code = await sock.requestPairingCode(OWNER_NUMBER); 
-                    console.log("🔥 الكود الحقيقي للربط هو: " + code);
+                    let cleanNumber = OWNER_NUMBER.replace(/[^0-9]/g, '');
+                    let code = await sock.requestPairingCode(cleanNumber); 
+                    console.log("\n\n🔥 الكود الحقيقي للربط هو: " + code + "\n\n");
                 } catch (e) {
                     console.error("⚠️ فشل توليد كود الربط:", e.message);
+                    pairingCodeRequested = false; // السماح بالمحاولة مجدداً في حال الفشل
                 }
-            }, 4000);
+            }, 5000); // تأخير 5 ثوانٍ لضمان استقرار الاتصال قبل الطلب
         }
 
         if (connection === 'open') {
@@ -84,6 +91,7 @@ async function startBot() {
         }
 
         if (connection === 'close') {
+            pairingCodeRequested = false;
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) setTimeout(startBot, 5000);
         }
