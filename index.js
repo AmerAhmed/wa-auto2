@@ -6,20 +6,17 @@ const { askGemini } = require('./gemini');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
-const WEBHOOK_KEY = process.env.WEBHOOK_KEY || "amer123";
+const WEBHOOK_KEY = process.env.WEBHOOK_KEY || "amer_secure_key_123";
 
-process.on('uncaughtException', (err) => {
-    console.error('Uncaught Exception:', err);
-});
+process.on('uncaughtException', (err) => console.error('Uncaught Exception:', err));
 process.on('unhandledRejection', (reason, promise) => console.error('Unhandled Rejection at:', promise, 'reason:', reason));
 
 const OWNER_NUMBER = process.env.OWNER_NUMBER || "967782541491";
+const cleanOwner = OWNER_NUMBER.replace(/[^0-9]/g, '');
+const myJid = `${cleanOwner}@s.whatsapp.net`;
 const backupReplyText = `*ೃ⁀➷ 𝑨𝒎𝒆𝒓 𝑨𝒉𝒎𝒆𝒅 𖣘⚡*\n\n*ـ الحساب غير متوفر حالياً 📴*\n*ـ يرجى ترك رسالتك بوضوح وسأرد عليك فور تواجدي 🕕*\n*ـ ممنوع الاتصال منعاً للإحراج 📵*\n\n\`شكراً لوجودك وتفهمك العالي\` ✨`;
 
-const globalCommands = [
-    'ايقاف', 'تشغيل', 'مسح كل المحظورين', 'مسح كل المكتومين', 'مسح كل ai',
-    'حظر الكل', 'فك حظر الكل', 'كتم الكل', 'فك كتم الكل', 'حظر ai الكل', 'فك حظر ai الكل'
-];
+const globalCommands = ['ايقاف', 'تشغيل', 'مسح كل المحظورين', 'مسح كل المكتومين', 'مسح كل ai', 'حظر الكل', 'فك حظر الكل', 'كتم الكل', 'فك كتم الكل', 'حظر ai الكل', 'فك حظر ai الكل'];
 const targetedCommands = ['كتم', 'فك الكتم', 'حظر', 'فك الحظر', 'حظر ai', 'فك حظر ai'];
 const allCommands = [...globalCommands, ...targetedCommands].sort((a, b) => b.length - a.length);
 
@@ -44,13 +41,21 @@ function cancelAllPendingQueues() {
     }
 }
 
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, data] of messageQueue.entries()) {
+        if (now - data.timestamp > 120000) {
+            clearTimeout(data.timeout);
+            messageQueue.delete(key);
+            processingUsers.delete(key);
+        }
+    }
+}, 60000);
+
 async function startBot() {
-    // 💡 تم التغيير إلى v9 لفرض إنشاء جلسة نظيفة خالية من الأخطاء العالقة في Redis
     const { state, saveCreds } = await useRedisAuthState('wa_session_v9');
 
-    const storedState = await redis.get('bot_active_state');
-    isBotActive = storedState !== 'false';
-
+    isBotActive = (await redis.get('bot_active_state')) !== 'false';
     globalBlacklist = await redis.get('global_blacklist') === 'true';
     globalSilence = await redis.get('global_silence') === 'true';
     globalAiBlacklist = await redis.get('global_ai_blacklist') === 'true';
@@ -70,20 +75,18 @@ async function startBot() {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
 
-        // 💡 إضافة شرط pairingCodeRequested لمنع إرسال طلبات متكررة تتسبب في إغلاق الاتصال
         if (connection === 'connecting' && !sock.authState.creds.registered && !pairingCodeRequested) {
             pairingCodeRequested = true;
             setTimeout(async () => {
                 console.log("⏳ جارِ طلب كود الربط...");
-                try { 
-                    let cleanNumber = OWNER_NUMBER.replace(/[^0-9]/g, '');
-                    let code = await sock.requestPairingCode(cleanNumber); 
+                try {
+                    let code = await sock.requestPairingCode(cleanOwner);
                     console.log("\n\n🔥 الكود الحقيقي للربط هو: " + code + "\n\n");
                 } catch (e) {
                     console.error("⚠️ فشل توليد كود الربط:", e.message);
-                    pairingCodeRequested = false; // السماح بالمحاولة مجدداً في حال الفشل
+                    pairingCodeRequested = false;
                 }
-            }, 5000); // تأخير 5 ثوانٍ لضمان استقرار الاتصال قبل الطلب
+            }, 5000);
         }
 
         if (connection === 'open') {
@@ -107,15 +110,12 @@ async function startBot() {
 
             const remoteJid = msg.key.remoteJid;
             const participantJid = msg.key.participant || msg.participant || remoteJid;
-            
+
             let actualMsg = msg.message?.ephemeralMessage?.message || msg.message?.documentWithCaptionMessage?.message || msg.message;
             const textMessage = actualMsg?.conversation || actualMsg?.extendedTextMessage?.text || actualMsg?.imageMessage?.caption || actualMsg?.videoMessage?.caption || "";
-            
+
             const senderKey = participantJid.split('@')[0];
             const isOwner = msg.key.fromMe;
-            
-            const cleanOwner = OWNER_NUMBER.replace(/[^0-9]/g, '');
-            const myJid = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : cleanOwner + '@s.whatsapp.net';
 
             if (isOwner) cancelAllPendingQueues();
 
@@ -127,8 +127,8 @@ async function startBot() {
                         let senderName = msg.pushName || 'غير معروف';
                         let senderNumber = remoteJid.split('@')[0];
 
-                        let viewOnceContent = msg.message?.viewOnceMessage?.message || 
-                                              msg.message?.viewOnceMessageV2?.message || 
+                        let viewOnceContent = msg.message?.viewOnceMessage?.message ||
+                                              msg.message?.viewOnceMessageV2?.message ||
                                               msg.message?.viewOnceMessageV2Extension?.message ||
                                               actualMsg?.viewOnceMessage?.message ||
                                               actualMsg?.viewOnceMessageV2?.message ||
@@ -138,12 +138,10 @@ async function startBot() {
                             try {
                                 const mediaType = Object.keys(viewOnceContent)[0];
                                 const buffer = await downloadMediaMessage(
-                                    { key: msg.key, message: msg.message?.ephemeralMessage?.message || msg.message }, 
-                                    'buffer', 
-                                    { }, 
-                                    { logger: pino({ level: 'silent' }) }
+                                    { key: msg.key, message: msg.message?.ephemeralMessage?.message || msg.message },
+                                    'buffer', { }, { logger: pino({ level: 'silent' }) }
                                 );
-                                
+
                                 const captionInfo = `🚨 *مؤقتة (خاص)*\n👤 من: ${senderName}\n📞 رقم: +${senderNumber}`;
 
                                 if (mediaType === 'imageMessage') {
@@ -155,22 +153,20 @@ async function startBot() {
                                     await sock.sendMessage(myJid, { text: captionInfo });
                                 }
                             } catch (err) {
+                                console.error("⚠️ فشل تحميل الرسالة المؤقتة:", err);
                                 await sock.sendMessage(myJid, { text: `⚠️ تنبيه: رسالة مؤقتة من +${senderNumber} فشل تحميلها.` });
                             }
                         } else {
                             let infoText = `📥 *رسالة خاصة*\n👤 من: ${senderName}\n📞 رقم: +${senderNumber}\n`;
-                            
-                            if (textMessage) {
-                                infoText += `\n*النص:*\n${textMessage}`;
-                            } else {
-                                infoText += `\n*[مرفق/وسائط]*`;
-                            }
+                            infoText += textMessage ? `\n*النص:*\n${textMessage}` : `\n*[مرفق/وسائط]*`;
 
                             await sock.sendMessage(myJid, { text: infoText });
 
                             try {
                                 await sock.sendMessage(myJid, { forward: msg });
-                            } catch(e) {}
+                            } catch(e) {
+                                console.error("⚠️ فشل تحويل الرسالة كـ Forward:", e.message);
+                            }
                         }
                     }
                 }
@@ -180,25 +176,24 @@ async function startBot() {
 
             if (remoteJid === 'status@broadcast') {
                 if (isOwner || !isBotActive) continue;
-                
+
                 const [isTargetBlacklisted, isTargetSilenced] = await Promise.all([
                     redis.sismember('blacklist', senderKey),
                     redis.sismember('silenceList', senderKey)
                 ]);
 
-                let isInBlacklist = globalBlacklist || isTargetBlacklisted;
-                let isInSilence = globalSilence || isTargetSilenced;
+                if (globalBlacklist || isTargetBlacklisted) continue;
 
                 try {
                     await sock.readMessages([msg.key]);
-                    if (isInBlacklist) continue;
                     await sock.sendMessage(participantJid, { react: { text: '💚', key: msg.key } });
-                    if (isInSilence) continue;
-                    if (myJid) {
-                        let senderName = msg.pushName || 'غير معروف';
-                        await sock.sendMessage(myJid, { text: `👁️‍🗨️ *تفاعل مع حالة*\n👤 الاسم: ${senderName}\n📱 الرقم: +${senderKey}\n✨ التفاعل: 💚` });
-                    }
-                } catch (e) {}
+                    if (globalSilence || isTargetSilenced) continue;
+                    
+                    let senderName = msg.pushName || 'غير معروف';
+                    await sock.sendMessage(myJid, { text: `👁️‍🗨️ *تفاعل مع حالة*\n👤 الاسم: ${senderName}\n📱 الرقم: +${senderKey}\n✨ التفاعل: 💚` });
+                } catch (e) {
+                    console.error("خطأ التفاعل مع الحالة:", e.message);
+                }
                 continue;
             }
 
@@ -214,9 +209,7 @@ async function startBot() {
                         let targetStr = targetNumMatch ? targetNumMatch[0] : null;
                         targetKey = targetStr ? targetStr : (actualMsg?.contextInfo?.participant)?.split('@')[0];
 
-                        if (!targetKey && !remoteJid.includes('@g.us')) {
-                            targetKey = remoteJid.split('@')[0];
-                        }
+                        if (!targetKey && !remoteJid.includes('@g.us')) targetKey = remoteJid.split('@')[0];
 
                         if (!targetKey || targetKey.includes('@g.us')) {
                             try { await sock.sendMessage(remoteJid, { text: '⚠️ لم يتم تحديد هدف صالح.' }); } catch(e) {}
@@ -244,7 +237,7 @@ async function startBot() {
                             case 'مسح كل المكتومين': await redis.del('silenceList'); await sock.sendMessage(remoteJid, { text: 'تم المسح 🗑️' }); break;
                             case 'مسح كل ai': await redis.del('aiBlacklist'); await sock.sendMessage(remoteJid, { text: 'تم المسح 🗑️' }); break;
                         }
-                    } catch(e) {}
+                    } catch(e) { console.error("خطأ في تنفيذ الأمر:", e.message); }
                     continue;
                 }
             }
@@ -267,9 +260,10 @@ async function startBot() {
             let coreMessage = isOwnerAiPrompt ? textMessage.substring(1).trim() : textMessage;
             let finalMessageToProcess = quotedText ? `النص المقتبس: "${quotedText}"\nالرسالة: ${coreMessage}` : coreMessage;
 
-            if (!messageQueue.has(queueKey)) messageQueue.set(queueKey, { texts: [], isOwner: isOwner, timeout: null });
+            if (!messageQueue.has(queueKey)) messageQueue.set(queueKey, { texts: [], isOwner: isOwner, timeout: null, timestamp: Date.now() });
             const queueData = messageQueue.get(queueKey);
             queueData.texts.push(finalMessageToProcess);
+            queueData.timestamp = Date.now();
 
             const processQueue = async () => {
                 try {
@@ -299,6 +293,7 @@ async function startBot() {
                         const responseText = await askGemini(targetContext, fullContext, queueData.isOwner);
                         await sock.sendMessage(remoteJid, { text: responseText }, queueData.isOwner ? { quoted: msg } : undefined);
                     } catch (e) {
+                        console.error("خطأ من Gemini:", e.message);
                         if (queueData.isOwner) {
                             await sock.sendMessage(remoteJid, { text: `⚠️ خطأ من Gemini: ${e.message}` });
                         } else {
@@ -309,6 +304,7 @@ async function startBot() {
                     }
                 } catch (generalError) {
                     console.error('Socket Execution Error:', generalError);
+                    processingUsers.delete(queueKey);
                 }
             };
 
@@ -332,7 +328,7 @@ app.get('/api/control', async (req, res) => {
         autoRestartTimer = setTimeout(async () => {
             isBotActive = true;
             await redis.set('bot_active_state', 'true');
-            if(sock) { try { await sock.sendMessage(OWNER_NUMBER + '@s.whatsapp.net', { text: '⚙️ تم تشغيل الذكاء الاصطناعي تلقائياً.' }); } catch(e){} }
+            if(sock) { try { await sock.sendMessage(myJid, { text: '⚙️ تم تشغيل الذكاء الاصطناعي تلقائياً.' }); } catch(e){} }
         }, 10 * 60 * 1000);
         res.json({ status: "success", message: "تم الإيقاف." });
     } else if (state === 'on') {
