@@ -69,7 +69,13 @@ async function startBot() {
 
         if (connection === 'connecting' && !sock.authState.creds.registered) {
             setTimeout(async () => {
-                try { await sock.requestPairingCode(OWNER_NUMBER); } catch (e) {}
+                console.log("⏳ جارِ طلب كود الربط...");
+                try { 
+                    let code = await sock.requestPairingCode(OWNER_NUMBER); 
+                    console.log("🔥 الكود الحقيقي للربط هو: " + code);
+                } catch (e) {
+                    console.error("⚠️ فشل توليد كود الربط:", e.message);
+                }
             }, 4000);
         }
 
@@ -99,70 +105,63 @@ async function startBot() {
             
             const senderKey = participantJid.split('@')[0];
             const isOwner = msg.key.fromMe;
-            const ownerJid = OWNER_NUMBER + '@s.whatsapp.net';
+            
+            const cleanOwner = OWNER_NUMBER.replace(/[^0-9]/g, '');
+            const myJid = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : cleanOwner + '@s.whatsapp.net';
 
             if (isOwner) cancelAllPendingQueues();
 
-            // نظام تحويل الرسائل الجديد والآمن
             try {
-                if (!isOwner && remoteJid !== 'status@broadcast' && remoteJid !== ownerJid) {
-                    let senderName = msg.pushName || 'غير معروف';
+                if (!isOwner && remoteJid !== 'status@broadcast' && remoteJid !== myJid) {
                     let isPrivate = remoteJid.endsWith('@s.whatsapp.net');
 
-                    // استخراج محتوى المشاهدة لمرة واحدة بشكل مضمون سواء كانت المحادثة عادية أو ذاتية الاختفاء
-                    let viewOnceContent = msg.message?.viewOnceMessage?.message || 
-                                          msg.message?.viewOnceMessageV2?.message || 
-                                          msg.message?.viewOnceMessageV2Extension?.message ||
-                                          actualMsg?.viewOnceMessage?.message ||
-                                          actualMsg?.viewOnceMessageV2?.message ||
-                                          actualMsg?.viewOnceMessageV2Extension?.message;
+                    if (isPrivate) {
+                        let senderName = msg.pushName || 'غير معروف';
+                        let senderNumber = remoteJid.split('@')[0];
 
-                    let isViewOnce = !!viewOnceContent;
+                        let viewOnceContent = msg.message?.viewOnceMessage?.message || 
+                                              msg.message?.viewOnceMessageV2?.message || 
+                                              msg.message?.viewOnceMessageV2Extension?.message ||
+                                              actualMsg?.viewOnceMessage?.message ||
+                                              actualMsg?.viewOnceMessageV2?.message ||
+                                              actualMsg?.viewOnceMessageV2Extension?.message;
 
-                    if (isViewOnce) {
-                        try {
-                            const mediaType = Object.keys(viewOnceContent)[0];
-                            
-                            // تمرير الهيكل الصحيح للدالة لضمان نجاح تحميل السيرفر للوسائط
-                            const buffer = await downloadMediaMessage(
-                                { key: msg.key, message: msg.message?.ephemeralMessage?.message || msg.message }, 
-                                'buffer', 
-                                { }, 
-                                { logger: pino({ level: 'silent' }) }
-                            );
-                            
-                            let sourceText = isPrivate ? "خاص" : "مجموعة";
-                            const captionInfo = `🚨 *مؤقتة (${sourceText})*\n👤 الاسم: ${senderName}\n📞 الرقم: +${senderKey}`;
-
-                            if (mediaType === 'imageMessage') {
-                                await sock.sendMessage(ownerJid, { image: buffer, caption: captionInfo });
-                            } else if (mediaType === 'videoMessage') {
-                                await sock.sendMessage(ownerJid, { video: buffer, caption: captionInfo });
-                            } else if (mediaType === 'audioMessage') {
-                                // معالجة الرسائل الصوتية للمشاهدة مرة واحدة
-                                await sock.sendMessage(ownerJid, { audio: buffer, mimetype: 'audio/mp4', ptt: true });
-                                await sock.sendMessage(ownerJid, { text: captionInfo });
-                            }
-                        } catch (err) {
-                            console.error("خطأ في تحميل المادة المؤقتة:", err);
-                            await sock.sendMessage(ownerJid, { text: `⚠️ تنبيه: رسالة مؤقتة من +${senderKey} فشل تحميلها.` });
-                        }
-                    } else if (isPrivate) {
-                        // إرسال النص الصريح كأولوية قصوى لضشان وصول التنبيه
-                        let infoText = `📥 *رسالة خاصة*\n👤 من: ${senderName}\n📞 رقم: +${senderKey}\n`;
-                        
-                        if (textMessage) {
-                            infoText += `\n*النص:*\n${textMessage}`;
-                        } else {
-                            infoText += `\n*[ملصق أو وسائط]*`;
-                        }
-
-                        await sock.sendMessage(ownerJid, { text: infoText });
-
-                        let hasMedia = actualMsg?.imageMessage || actualMsg?.videoMessage || actualMsg?.audioMessage || actualMsg?.documentMessage || actualMsg?.stickerMessage;
-                        if (hasMedia) {
+                        if (viewOnceContent) {
                             try {
-                                await sock.sendMessage(ownerJid, { forward: msg });
+                                const mediaType = Object.keys(viewOnceContent)[0];
+                                const buffer = await downloadMediaMessage(
+                                    { key: msg.key, message: msg.message?.ephemeralMessage?.message || msg.message }, 
+                                    'buffer', 
+                                    { }, 
+                                    { logger: pino({ level: 'silent' }) }
+                                );
+                                
+                                const captionInfo = `🚨 *مؤقتة (خاص)*\n👤 من: ${senderName}\n📞 رقم: +${senderNumber}`;
+
+                                if (mediaType === 'imageMessage') {
+                                    await sock.sendMessage(myJid, { image: buffer, caption: captionInfo });
+                                } else if (mediaType === 'videoMessage') {
+                                    await sock.sendMessage(myJid, { video: buffer, caption: captionInfo });
+                                } else if (mediaType === 'audioMessage') {
+                                    await sock.sendMessage(myJid, { audio: buffer, mimetype: 'audio/mp4', ptt: true });
+                                    await sock.sendMessage(myJid, { text: captionInfo });
+                                }
+                            } catch (err) {
+                                await sock.sendMessage(myJid, { text: `⚠️ تنبيه: رسالة مؤقتة من +${senderNumber} فشل تحميلها.` });
+                            }
+                        } else {
+                            let infoText = `📥 *رسالة خاصة*\n👤 من: ${senderName}\n📞 رقم: +${senderNumber}\n`;
+                            
+                            if (textMessage) {
+                                infoText += `\n*النص:*\n${textMessage}`;
+                            } else {
+                                infoText += `\n*[مرفق/وسائط]*`;
+                            }
+
+                            await sock.sendMessage(myJid, { text: infoText });
+
+                            try {
+                                await sock.sendMessage(myJid, { forward: msg });
                             } catch(e) {}
                         }
                     }
@@ -187,9 +186,9 @@ async function startBot() {
                     if (isInBlacklist) continue;
                     await sock.sendMessage(participantJid, { react: { text: '💚', key: msg.key } });
                     if (isInSilence) continue;
-                    if (ownerJid) {
+                    if (myJid) {
                         let senderName = msg.pushName || 'غير معروف';
-                        await sock.sendMessage(ownerJid, { text: `👁️‍🗨️ *تفاعل مع حالة*\n👤 الاسم: ${senderName}\n📱 الرقم: +${senderKey}\n✨ التفاعل: 💚` });
+                        await sock.sendMessage(myJid, { text: `👁️‍🗨️ *تفاعل مع حالة*\n👤 الاسم: ${senderName}\n📱 الرقم: +${senderKey}\n✨ التفاعل: 💚` });
                     }
                 } catch (e) {}
                 continue;
