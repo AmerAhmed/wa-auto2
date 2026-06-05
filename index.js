@@ -13,7 +13,6 @@ process.on('unhandledRejection', (reason, promise) => console.error('Unhandled R
 
 const OWNER_NUMBER = process.env.OWNER_NUMBER || "967782541491";
 const cleanOwner = OWNER_NUMBER.replace(/[^0-9]/g, '');
-const myJid = `${cleanOwner}@s.whatsapp.net`;
 const backupReplyText = `*ೃ⁀➷ 𝑨𝒎𝒆𝒓 𝑨𝒉𝒎𝒆𝒅 𖣘⚡*\n\n*ـ الحساب غير متوفر حالياً 📴*\n*ـ يرجى ترك رسالتك بوضوح وسأرد عليك فور تواجدي 🕕*\n*ـ ممنوع الاتصال منعاً للإحراج 📵*\n\n\`شكراً لوجودك وتفهمك العالي\` ✨`;
 
 const globalCommands = ['ايقاف', 'تشغيل', 'مسح كل المحظورين', 'مسح كل المكتومين', 'مسح كل ai', 'حظر الكل', 'فك حظر الكل', 'كتم الكل', 'فك كتم الكل', 'حظر ai الكل', 'فك حظر ai الكل'];
@@ -101,6 +100,8 @@ async function startBot() {
     });
 
     sock.ev.on('messages.upsert', async (chatUpdate) => {
+        const targetOwner = sock?.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : `${cleanOwner}@s.whatsapp.net`;
+
         for (const msg of chatUpdate.messages) {
             if (!msg.message) continue;
 
@@ -120,52 +121,51 @@ async function startBot() {
             if (isOwner) cancelAllPendingQueues();
 
             try {
-                if (!isOwner && remoteJid !== 'status@broadcast' && remoteJid !== myJid) {
+                if (!isOwner && remoteJid !== 'status@broadcast' && remoteJid !== targetOwner) {
                     let isPrivate = remoteJid.endsWith('@s.whatsapp.net');
 
                     if (isPrivate) {
                         let senderName = msg.pushName || 'غير معروف';
                         let senderNumber = remoteJid.split('@')[0];
 
-                        let viewOnceContent = msg.message?.viewOnceMessage?.message ||
-                                              msg.message?.viewOnceMessageV2?.message ||
-                                              msg.message?.viewOnceMessageV2Extension?.message ||
-                                              actualMsg?.viewOnceMessage?.message ||
-                                              actualMsg?.viewOnceMessageV2?.message ||
-                                              actualMsg?.viewOnceMessageV2Extension?.message;
+                        let viewOnceNode = msg.message?.viewOnceMessage || msg.message?.viewOnceMessageV2 || msg.message?.viewOnceMessageV2Extension || actualMsg?.viewOnceMessage || actualMsg?.viewOnceMessageV2 || actualMsg?.viewOnceMessageV2Extension;
 
-                        if (viewOnceContent) {
+                        if (viewOnceNode) {
                             try {
-                                const mediaType = Object.keys(viewOnceContent)[0];
+                                let mediaMsg = viewOnceNode.message;
+                                let mediaType = Object.keys(mediaMsg)[0];
+
                                 const buffer = await downloadMediaMessage(
-                                    { key: msg.key, message: msg.message?.ephemeralMessage?.message || msg.message },
+                                    msg,
                                     'buffer', { }, { logger: pino({ level: 'silent' }) }
                                 );
 
                                 const captionInfo = `🚨 *مؤقتة (خاص)*\n👤 من: ${senderName}\n📞 رقم: +${senderNumber}`;
 
                                 if (mediaType === 'imageMessage') {
-                                    await sock.sendMessage(myJid, { image: buffer, caption: captionInfo });
+                                    await sock.sendMessage(targetOwner, { image: buffer, caption: captionInfo });
                                 } else if (mediaType === 'videoMessage') {
-                                    await sock.sendMessage(myJid, { video: buffer, caption: captionInfo });
+                                    await sock.sendMessage(targetOwner, { video: buffer, caption: captionInfo });
                                 } else if (mediaType === 'audioMessage') {
-                                    await sock.sendMessage(myJid, { audio: buffer, mimetype: 'audio/mp4', ptt: true });
-                                    await sock.sendMessage(myJid, { text: captionInfo });
+                                    await sock.sendMessage(targetOwner, { audio: buffer, mimetype: 'audio/mp4', ptt: true });
+                                    await sock.sendMessage(targetOwner, { text: captionInfo });
+                                } else {
+                                    await sock.sendMessage(targetOwner, { text: `🚨 *مؤقتة (نوع غير معروف)*\n👤 من: ${senderName}\n📞 رقم: +${senderNumber}` });
                                 }
                             } catch (err) {
                                 console.error("⚠️ فشل تحميل الرسالة المؤقتة:", err);
-                                await sock.sendMessage(myJid, { text: `⚠️ تنبيه: رسالة مؤقتة من +${senderNumber} فشل تحميلها.` });
+                                await sock.sendMessage(targetOwner, { text: `⚠️ تنبيه: رسالة مؤقتة من +${senderNumber} فشل تحميلها.\nالخطأ: ${err.message}` });
                             }
                         } else {
                             let infoText = `📥 *رسالة خاصة*\n👤 من: ${senderName}\n📞 رقم: +${senderNumber}\n`;
                             infoText += textMessage ? `\n*النص:*\n${textMessage}` : `\n*[مرفق/وسائط]*`;
 
-                            await sock.sendMessage(myJid, { text: infoText });
-
                             try {
-                                await sock.sendMessage(myJid, { forward: msg });
+                                await sock.sendMessage(targetOwner, { text: infoText });
+                                await sock.sendMessage(targetOwner, { forward: msg });
                             } catch(e) {
                                 console.error("⚠️ فشل تحويل الرسالة كـ Forward:", e.message);
+                                await sock.sendMessage(targetOwner, { text: `⚠️ فشل التوجيه للرسالة الأصلية المرفقة أعلاه.` });
                             }
                         }
                     }
@@ -190,7 +190,7 @@ async function startBot() {
                     if (globalSilence || isTargetSilenced) continue;
                     
                     let senderName = msg.pushName || 'غير معروف';
-                    await sock.sendMessage(myJid, { text: `👁️‍🗨️ *تفاعل مع حالة*\n👤 الاسم: ${senderName}\n📱 الرقم: +${senderKey}\n✨ التفاعل: 💚` });
+                    await sock.sendMessage(targetOwner, { text: `👁️‍🗨️ *تفاعل مع حالة*\n👤 الاسم: ${senderName}\n📱 الرقم: +${senderKey}\n✨ التفاعل: 💚` });
                 } catch (e) {
                     console.error("خطأ التفاعل مع الحالة:", e.message);
                 }
@@ -289,8 +289,8 @@ async function startBot() {
                     processingUsers.add(queueKey);
 
                     try {
-                        const targetContext = queueData.isOwner ? `owner_context_${remoteJid}` : remoteJid;
-                        const responseText = await askGemini(targetContext, fullContext, queueData.isOwner);
+                        const targetAiContext = queueData.isOwner ? `owner_context_${remoteJid}` : remoteJid;
+                        const responseText = await askGemini(targetAiContext, fullContext, queueData.isOwner);
                         await sock.sendMessage(remoteJid, { text: responseText }, queueData.isOwner ? { quoted: msg } : undefined);
                     } catch (e) {
                         console.error("خطأ من Gemini:", e.message);
@@ -328,7 +328,10 @@ app.get('/api/control', async (req, res) => {
         autoRestartTimer = setTimeout(async () => {
             isBotActive = true;
             await redis.set('bot_active_state', 'true');
-            if(sock) { try { await sock.sendMessage(myJid, { text: '⚙️ تم تشغيل الذكاء الاصطناعي تلقائياً.' }); } catch(e){} }
+            if(sock) { 
+                const targetOwner = sock?.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : `${cleanOwner}@s.whatsapp.net`;
+                try { await sock.sendMessage(targetOwner, { text: '⚙️ تم تشغيل الذكاء الاصطناعي تلقائياً.' }); } catch(e){} 
+            }
         }, 10 * 60 * 1000);
         res.json({ status: "success", message: "تم الإيقاف." });
     } else if (state === 'on') {
