@@ -1,0 +1,14 @@
+{
+  "name": "wa-status-react-bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "latest",
+    "express": "^4.21.2",
+    "ioredis": "^5.7.0",
+    "pino": "^9.7.0"
+  }
+}
